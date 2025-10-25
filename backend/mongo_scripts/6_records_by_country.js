@@ -1,6 +1,6 @@
 // MapReduce: Record count by country
 
-use climate_db;
+var db = db.getSiblingDB('climate_db');
 
 print("\n" + "=".repeat(60));
 print("MapReduce #6: Record Count by Country");

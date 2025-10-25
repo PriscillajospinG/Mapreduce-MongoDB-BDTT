@@ -1,6 +1,6 @@
-// MapReduce: Extreme temperature records by country
+// MapReduce: Extreme temperature records
 
-use climate_db;
+var db = db.getSiblingDB('climate_db');
 
 print("\n" + "=".repeat(60));
 print("MapReduce #4: Extreme Temperature Records");

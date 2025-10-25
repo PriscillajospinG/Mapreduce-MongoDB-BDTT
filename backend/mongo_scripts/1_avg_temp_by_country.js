@@ -1,6 +1,6 @@
 // MapReduce: Average temperature by country
 
-use climate_db;
+var db = db.getSiblingDB('climate_db');
 
 print("\n" + "=".repeat(60));
 print("MapReduce #1: Average Temperature by Country");

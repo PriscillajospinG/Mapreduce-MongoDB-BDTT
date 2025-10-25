@@ -1,6 +1,6 @@
-// MapReduce: Temperature by decade
+// MapReduce: Temperature analysis by decade
 
-use climate_db;
+var db = db.getSiblingDB('climate_db');
 
 print("\n" + "=".repeat(60));
 print("MapReduce #5: Temperature Analysis by Decade");
