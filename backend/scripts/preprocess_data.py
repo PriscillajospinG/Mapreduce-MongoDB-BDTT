@@ -1,227 +1,232 @@
 """
-Data Preprocessing Script for MongoDB Climate Analysis
-Cleans and validates data stored in MongoDB collections
+PySpark Data Preprocessing Script
+Cleans and transforms data using Spark DataFrames
 """
-import os
 import sys
-from datetime import datetime
-from pymongo import MongoClient
-from tqdm import tqdm
+from pathlib import Path
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MONGO_URI, DATABASE_NAME, COLLECTIONS, TEMPERATURE_THRESHOLD, MIN_YEAR, MAX_YEAR
+# Add parent directory to path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, year, month, to_date, when, floor
+from config import *
 
 
-class DataPreprocessor:
-    """Handles data cleaning and preprocessing in MongoDB"""
+def create_spark_session():
+    """Initialize and return a Spark session"""
+    spark = SparkSession.builder \
+        .appName(SPARK_APP_NAME) \
+        .master(SPARK_MASTER) \
+        .config("spark.driver.memory", SPARK_DRIVER_MEMORY) \
+        .config("spark.executor.memory", SPARK_EXECUTOR_MEMORY) \
+        .config("spark.sql.shuffle.partitions", SPARK_SQL_SHUFFLE_PARTITIONS) \
+        .getOrCreate()
     
-    def __init__(self):
-        """Initialize MongoDB connection"""
-        try:
-            self.client = MongoClient(MONGO_URI)
-            self.db = self.client[DATABASE_NAME]
-            print(f"✓ Connected to MongoDB: {DATABASE_NAME}")
-        except Exception as e:
-            print(f"✗ Failed to connect to MongoDB: {e}")
-            sys.exit(1)
+    spark.sparkContext.setLogLevel(LOG_LEVEL)
+    return spark
+
+
+def preprocess_dataset(spark, dataset_name):
+    """
+    Preprocess a single dataset
     
-    def preprocess_collection(self, collection_name):
-        """
-        Clean and preprocess a single collection
-        
-        Args:
-            collection_name: Name of the MongoDB collection
-        """
-        print(f"\n{'='*60}")
-        print(f"Preprocessing collection: {collection_name}")
-        print(f"{'='*60}")
-        
-        collection = self.db[collection_name]
-        initial_count = collection.count_documents({})
-        print(f"Initial record count: {initial_count:,}")
-        
-        if initial_count == 0:
-            print(f"⚠ Collection is empty, skipping...")
-            return
-        
-        # Statistics
-        stats = {
-            'removed_invalid_temp': 0,
-            'removed_invalid_date': 0,
-            'removed_out_of_range': 0,
-            'updated_date_format': 0,
-            'added_year_field': 0,
-            'added_month_field': 0
-        }
-        
-        # Step 1: Remove records with invalid temperatures
-        print("\n1. Removing invalid temperature records...")
-        result = collection.delete_many({
-            'AverageTemperature': {'$lt': TEMPERATURE_THRESHOLD}
-        })
-        stats['removed_invalid_temp'] = result.deleted_count
-        print(f"   ✓ Removed {result.deleted_count:,} records with temperature < {TEMPERATURE_THRESHOLD}°C")
-        
-        # Step 2: Extract year and month from date field
-        print("\n2. Extracting year and month fields...")
-        cursor = collection.find({'dt': {'$exists': True}})
-        
-        bulk_operations = []
-        for doc in tqdm(cursor, desc="   Processing", total=collection.count_documents({'dt': {'$exists': True}})):
-            try:
-                # Parse date string (format: YYYY-MM-DD)
-                date_str = doc.get('dt', '')
-                if date_str and len(date_str) >= 7:
-                    year = int(date_str[:4])
-                    month = int(date_str[5:7])
-                    
-                    # Update document with year and month fields
-                    bulk_operations.append({
-                        'filter': {'_id': doc['_id']},
-                        'update': {
-                            '$set': {
-                                'year': year,
-                                'month': month
-                            }
-                        }
-                    })
-                    stats['added_year_field'] += 1
-                    stats['added_month_field'] += 1
-                    
-                    # Execute bulk operations in batches
-                    if len(bulk_operations) >= 5000:
-                        for op in bulk_operations:
-                            collection.update_one(op['filter'], op['update'])
-                        bulk_operations = []
-                        
-            except (ValueError, IndexError) as e:
-                # Invalid date format, will be removed later
-                pass
-        
-        # Execute remaining bulk operations
-        if bulk_operations:
-            for op in bulk_operations:
-                collection.update_one(op['filter'], op['update'])
-        
-        print(f"   ✓ Added year/month fields to {stats['added_year_field']:,} records")
-        
-        # Step 3: Remove records with invalid dates or missing year field
-        print("\n3. Removing records with invalid dates...")
-        result = collection.delete_many({
-            '$or': [
-                {'year': {'$exists': False}},
-                {'year': {'$lt': MIN_YEAR}},
-                {'year': {'$gt': MAX_YEAR}},
-                {'month': {'$lt': 1}},
-                {'month': {'$gt': 12}}
-            ]
-        })
-        stats['removed_invalid_date'] = result.deleted_count
-        print(f"   ✓ Removed {result.deleted_count:,} records with invalid dates")
-        
-        # Step 4: Remove duplicate records (based on location and date)
-        print("\n4. Removing duplicate records...")
-        duplicates_removed = self._remove_duplicates(collection)
-        print(f"   ✓ Removed {duplicates_removed:,} duplicate records")
-        
-        # Step 5: Add processed flag
-        print("\n5. Marking records as preprocessed...")
-        collection.update_many(
-            {},
-            {'$set': {'preprocessed': True, 'preprocessed_at': datetime.utcnow().isoformat()}}
-        )
-        print(f"   ✓ Marked all records as preprocessed")
-        
-        # Final count
-        final_count = collection.count_documents({})
-        removed_total = initial_count - final_count
-        
-        print(f"\n{'='*60}")
-        print(f"PREPROCESSING SUMMARY - {collection_name}")
-        print(f"{'='*60}")
-        print(f"Initial records:           {initial_count:,}")
-        print(f"Final records:             {final_count:,}")
-        print(f"Total removed:             {removed_total:,}")
-        print(f"Retention rate:            {(final_count/initial_count*100):.2f}%")
-        print(f"{'='*60}\n")
-        
-        return stats
+    Args:
+        spark: SparkSession
+        dataset_name: Name of dataset (e.g., 'country', 'city')
     
-    def _remove_duplicates(self, collection):
-        """Remove duplicate records from collection"""
-        # Get sample document to determine key fields
-        sample = collection.find_one()
-        if not sample:
-            return 0
-        
-        # Determine grouping fields based on collection type
-        group_fields = ['dt']
-        if 'Country' in sample:
-            group_fields.append('Country')
-        if 'City' in sample:
-            group_fields.append('City')
-        if 'State' in sample:
-            group_fields.append('State')
-        
-        # Find duplicates using aggregation
-        pipeline = [
-            {
-                '$group': {
-                    '_id': {field: f'${field}' for field in group_fields},
-                    'ids': {'$push': '$_id'},
-                    'count': {'$sum': 1}
-                }
-            },
-            {
-                '$match': {
-                    'count': {'$gt': 1}
-                }
-            }
-        ]
-        
-        duplicates = list(collection.aggregate(pipeline))
-        removed_count = 0
-        
-        # Remove duplicates, keep the first occurrence
-        for dup in duplicates:
-            ids_to_remove = dup['ids'][1:]  # Keep first, remove rest
-            collection.delete_many({'_id': {'$in': ids_to_remove}})
-            removed_count += len(ids_to_remove)
-        
-        return removed_count
+    Returns:
+        Preprocessed DataFrame
+    """
+    print(f"\n{'='*60}")
+    print(f"Preprocessing {dataset_name.upper()} dataset...")
+    print(f"{'='*60}")
     
-    def preprocess_all(self):
-        """Preprocess all collections"""
-        print("\n" + "="*60)
-        print("DATA PREPROCESSING - CLIMATE ANALYSIS PROJECT")
-        print("="*60)
-        
-        for collection_name in COLLECTIONS.values():
-            try:
-                self.preprocess_collection(collection_name)
-            except Exception as e:
-                print(f"✗ Error preprocessing {collection_name}: {e}")
-        
-        print("\n✓ All collections preprocessed successfully!\n")
+    # Read Parquet file
+    input_path = PROCESSED_DATA_DIR / f"{dataset_name}.parquet"
     
-    def close(self):
-        """Close MongoDB connection"""
-        self.client.close()
-        print("✓ MongoDB connection closed")
+    if not input_path.exists():
+        print(f"✗ File not found: {input_path}")
+        print(f"  Run load_data.py first to create Parquet files")
+        return None
+    
+    df = spark.read.parquet(str(input_path))
+    initial_count = df.count()
+    print(f"Initial record count: {initial_count:,}")
+    
+    # Step 1: Remove records with missing temperature values
+    print("\n1. Removing records with missing temperatures...")
+    df_clean = df.filter(col("AverageTemperature").isNotNull())
+    removed_null = initial_count - df_clean.count()
+    print(f"   ✓ Removed {removed_null:,} records with null temperatures")
+    
+    # Step 2: Remove invalid temperature values
+    print("\n2. Filtering invalid temperature values...")
+    df_clean = df_clean.filter(
+        (col("AverageTemperature") >= TEMPERATURE_THRESHOLD) &
+        (col("AverageTemperature") <= MAX_TEMPERATURE)
+    )
+    removed_invalid = initial_count - removed_null - df_clean.count()
+    print(f"   ✓ Removed {removed_invalid:,} records with invalid temperatures")
+    print(f"     (< {TEMPERATURE_THRESHOLD}°C or > {MAX_TEMPERATURE}°C)")
+    
+    # Step 3: Extract year and month from date field
+    print("\n3. Extracting year and month fields...")
+    df_clean = df_clean.withColumn("year", year(col("dt")))
+    df_clean = df_clean.withColumn("month", month(col("dt")))
+    print(f"   ✓ Added 'year' and 'month' columns")
+    
+    # Step 4: Filter by year range
+    print("\n4. Filtering by year range...")
+    df_clean = df_clean.filter(
+        (col("year") >= MIN_YEAR) &
+        (col("year") <= MAX_YEAR)
+    )
+    removed_year = initial_count - removed_null - removed_invalid - df_clean.count()
+    print(f"   ✓ Removed {removed_year:,} records outside year range")
+    print(f"     ({MIN_YEAR} - {MAX_YEAR})")
+    
+    # Step 5: Add season column (for seasonal analysis)
+    print("\n5. Adding season column...")
+    df_clean = df_clean.withColumn("season",
+        when((col("month") >= 3) & (col("month") <= 5), "Spring")
+        .when((col("month") >= 6) & (col("month") <= 8), "Summer")
+        .when((col("month") >= 9) & (col("month") <= 11), "Fall")
+        .otherwise("Winter")
+    )
+    print(f"   ✓ Added 'season' column")
+    
+    # Step 6: Add decade column (for decade analysis)
+    print("\n6. Adding decade column...")
+    df_clean = df_clean.withColumn("decade", (floor(col("year") / 10) * 10))
+    print(f"   ✓ Added 'decade' column")
+    
+    # Step 7: Remove duplicates
+    print("\n7. Removing duplicate records...")
+    
+    # Determine duplicate keys based on dataset type
+    if dataset_name == 'country':
+        duplicate_keys = ["dt", "Country"]
+    elif dataset_name in ['city', 'major_city']:
+        duplicate_keys = ["dt", "Country", "City"]
+    elif dataset_name == 'state':
+        duplicate_keys = ["dt", "Country", "State"]
+    else:  # global
+        duplicate_keys = ["dt"]
+    
+    before_dedup = df_clean.count()
+    df_clean = df_clean.dropDuplicates(duplicate_keys)
+    removed_duplicates = before_dedup - df_clean.count()
+    print(f"   ✓ Removed {removed_duplicates:,} duplicate records")
+    
+    # Final statistics
+    final_count = df_clean.count()
+    print(f"\n{'='*60}")
+    print(f"PREPROCESSING SUMMARY")
+    print(f"{'='*60}")
+    print(f"Initial records:     {initial_count:,}")
+    print(f"Final records:       {final_count:,}")
+    print(f"Total removed:       {initial_count - final_count:,}")
+    print(f"Retention rate:      {(final_count/initial_count*100):.2f}%")
+    print(f"{'='*60}")
+    
+    # Show schema
+    print(f"\nFinal Schema:")
+    df_clean.printSchema()
+    
+    # Show sample
+    print(f"\nSample preprocessed data:")
+    df_clean.show(5, truncate=False)
+    
+    return df_clean
+
+
+def save_preprocessed_data(df, dataset_name):
+    """
+    Save preprocessed DataFrame as Parquet
+    
+    Args:
+        df: Preprocessed Spark DataFrame
+        dataset_name: Name for output file
+    """
+    output_path = PROCESSED_DATA_DIR / f"{dataset_name}_clean.parquet"
+    
+    print(f"\nSaving preprocessed data...")
+    print(f"Output: {output_path}")
+    
+    df.write.mode("overwrite").parquet(str(output_path))
+    
+    print(f"✓ Saved preprocessed data")
 
 
 def main():
     """Main execution function"""
-    preprocessor = DataPreprocessor()
+    print("\n" + "="*70)
+    print("PYSPARK DATA PREPROCESSING - CLIMATE ANALYSIS PROJECT")
+    print("="*70)
+    
+    # Create Spark session
+    print("\nInitializing Spark session...")
+    spark = create_spark_session()
+    print(f"✓ Spark session created")
+    
+    # Show menu
+    print("\n" + "="*60)
+    print("SELECT DATASET TO PREPROCESS")
+    print("="*60)
+    print("\nAvailable datasets:")
+    
+    datasets = list(DATASET_PATHS.keys())
+    for i, dataset_name in enumerate(datasets, 1):
+        print(f"  {i}. {dataset_name}")
+    print(f"  {len(datasets) + 1}. Preprocess ALL datasets")
+    
+    # Get user choice
+    choice = input(f"\nEnter your choice (1-{len(datasets) + 1}): ").strip()
     
     try:
-        preprocessor.preprocess_all()
-        return 0
-    except KeyboardInterrupt:
-        print("\n\n✗ Preprocessing interrupted by user")
+        choice_num = int(choice)
+        
+        if choice_num == len(datasets) + 1:
+            # Preprocess all datasets
+            print("\nPreprocessing ALL datasets...")
+            for dataset_name in datasets:
+                df = preprocess_dataset(spark, dataset_name)
+                if df:
+                    save_preprocessed_data(df, dataset_name)
+            
+            print(f"\n{'='*60}")
+            print("✓ ALL DATASETS PREPROCESSED SUCCESSFULLY")
+            print(f"{'='*60}\n")
+            
+        elif 1 <= choice_num <= len(datasets):
+            # Preprocess single dataset
+            dataset_name = datasets[choice_num - 1]
+            df = preprocess_dataset(spark, dataset_name)
+            
+            if df:
+                save_preprocessed_data(df, dataset_name)
+                print(f"\n✓ Dataset '{dataset_name}' preprocessed successfully!")
+        else:
+            print(f"✗ Invalid choice. Please enter a number between 1 and {len(datasets) + 1}")
+            spark.stop()
+            return 1
+            
+    except ValueError:
+        print("✗ Invalid input. Please enter a number.")
+        spark.stop()
         return 1
-    finally:
-        preprocessor.close()
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        spark.stop()
+        return 1
+    
+    # Stop Spark session
+    spark.stop()
+    print("\n✓ Spark session stopped")
+    return 0
 
 
 if __name__ == "__main__":
