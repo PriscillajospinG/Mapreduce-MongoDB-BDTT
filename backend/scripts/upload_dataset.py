@@ -132,14 +132,56 @@ def main():
     uploader = DatasetUploader()
     
     try:
-        # Upload all datasets
-        success = uploader.upload_all()
+        # Show menu
+        print("\n" + "="*60)
+        print("SELECT DATASET TO UPLOAD")
+        print("="*60)
+        print("\nAvailable datasets:")
         
-        if success:
-            print("✓ All datasets uploaded successfully!")
-            return 0
-        else:
-            print("✗ Some datasets failed to upload")
+        datasets = list(DATASET_PATHS.keys())
+        for i, dataset_type in enumerate(datasets, 1):
+            print(f"  {i}. {dataset_type}")
+        print(f"  {len(datasets) + 1}. Upload ALL datasets")
+        
+        # Get user choice
+        choice = input(f"\nEnter your choice (1-{len(datasets) + 1}): ").strip()
+        
+        try:
+            choice_num = int(choice)
+            
+            if choice_num == len(datasets) + 1:
+                # Upload all datasets
+                success = uploader.upload_all()
+                if success:
+                    print("✓ All datasets uploaded successfully!")
+                    return 0
+                else:
+                    print("✗ Some datasets failed to upload")
+                    return 1
+            elif 1 <= choice_num <= len(datasets):
+                # Upload single dataset
+                dataset_type = datasets[choice_num - 1]
+                file_path = DATASET_PATHS[dataset_type]
+                collection_name = COLLECTIONS.get(dataset_type)
+                
+                # Convert relative path to absolute
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                abs_path = os.path.join(base_dir, file_path.replace('../', ''))
+                
+                success = uploader.upload_dataset(dataset_type, abs_path, collection_name)
+                
+                if success:
+                    print(f"\n✓ Dataset '{dataset_type}' uploaded successfully!")
+                    return 0
+                else:
+                    print(f"\n✗ Failed to upload dataset '{dataset_type}'")
+                    return 1
+            else:
+                print(f"✗ Invalid choice. Please enter a number between 1 and {len(datasets) + 1}")
+                return 1
+                
+        except ValueError:
+            print("✗ Invalid input. Please enter a number.")
             return 1
             
     except KeyboardInterrupt:
