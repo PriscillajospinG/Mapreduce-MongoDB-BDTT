@@ -1,6 +1,10 @@
 # Ignore the dataset folder (raw CSVs)
 /Dataset/
 
+# Virtual environment
+venv/
+.venv
+
 # macOS metadata
 .DS_Store
 
