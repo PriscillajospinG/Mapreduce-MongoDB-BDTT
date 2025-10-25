@@ -1,8 +1,34 @@
 # Ignore the dataset folder (raw CSVs)
 /Dataset/
 
+# Virtual environment
+venv/
+.venv
+
+# Environment variables
+.env
+
+# Output folders
+backend/output/
+*.json
+*.html
+
 # macOS metadata
 .DS_Store
 
 # Python cache (common)
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+
