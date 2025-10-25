@@ -91,7 +91,7 @@ def main():
     print("\n🔧 Initializing Spark Session...")
     spark = create_spark_session()
     print("✅ Spark session created successfully")
-    print(f"   Master: {spark.sparkContext.master()}")
+    print(f"   Master: {spark.sparkContext.master}")
     print(f"   App Name: {spark.sparkContext.appName}")
     
     # Ensure output directories exist
