@@ -448,34 +448,6 @@ async def get_records_by_country():
 # DATA OPERATIONS ENDPOINTS
 # ============================================================================
 
-@app.post('/api/upload')
-async def upload_dataset(file: UploadFile = File(...)):
-    """Upload dataset CSV file"""
-    try:
-        if not file.filename.endswith('.csv'):
-            raise HTTPException(status_code=400, detail="Only CSV files are supported")
-
-        filename = f"{datetime.now().timestamp()}_{file.filename}"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        
-        with open(filepath, "wb") as f:
-            content = await file.read()
-            f.write(content)
-
-        logger.info(f"File uploaded: {filename}")
-
-        return {
-            'message': f'Dataset uploaded successfully',
-            'filename': filename,
-            'size': len(content),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"Upload error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post('/api/preprocess/{dataset_name}')
 async def preprocess_data(dataset_name: str):
     """Preprocess dataset"""
