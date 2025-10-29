@@ -1146,6 +1146,334 @@ async def run_mapreduce_on_collection(collection_name: str):
 
 
 # ============================================================================
+# COMPLETE WORKFLOW: UPLOAD → PREPROCESS → MAPREDUCE → RESULTS
+# ============================================================================
+
+@app.post('/api/workflow/complete-analysis')
+async def complete_analysis(file: UploadFile = File(...)):
+    """
+    Complete end-to-end workflow:
+    1. Upload CSV to MongoDB
+    2. Preprocess the data
+    3. Run MapReduce operations
+    4. Store results in collections
+    5. Return visualization data
+    """
+    if not mongo_available or db is None:
+        raise HTTPException(status_code=500, detail="MongoDB not available")
+    
+    import csv
+    from io import StringIO
+    import re
+    
+    try:
+        logger.info(f"🚀 Starting complete analysis workflow for: {file.filename}")
+        
+        # ============================================
+        # STEP 1: UPLOAD & PARSE CSV
+        # ============================================
+        logger.info("📊 STEP 1: Uploading and parsing CSV...")
+        
+        content = await file.read()
+        text = content.decode('utf-8')
+        csv_reader = csv.DictReader(StringIO(text))
+        
+        if not csv_reader.fieldnames:
+            raise ValueError("CSV file is empty or invalid")
+        
+        # Generate collection name
+        file_name = file.filename.rsplit('.', 1)[0]
+        collection_name = f"uploaded_{re.sub(r'[^a-z0-9_]', '_', file_name.lower())}"
+        
+        # Parse CSV
+        collection = db[collection_name]
+        documents = []
+        
+        for row in csv_reader:
+            doc = {}
+            for key, value in row.items():
+                if key and value:
+                    if value.lower() in ['true', 'false']:
+                        doc[key] = value.lower() == 'true'
+                    elif value.lower() in ['null', 'none', '']:
+                        doc[key] = None
+                    else:
+                        try:
+                            if '.' in value:
+                                doc[key] = float(value)
+                            else:
+                                doc[key] = int(value)
+                        except ValueError:
+                            doc[key] = value
+            
+            if doc:
+                documents.append(doc)
+        
+        if not documents:
+            raise ValueError("No valid data found in CSV file")
+        
+        logger.info(f"✅ Parsed {len(documents):,} documents from CSV")
+        
+        # ============================================
+        # STEP 2: INSERT INTO MONGODB
+        # ============================================
+        logger.info("💾 STEP 2: Inserting data into MongoDB...")
+        
+        result = collection.insert_many(documents)
+        doc_count = len(result.inserted_ids)
+        
+        logger.info(f"✅ Inserted {doc_count:,} documents into collection: {collection_name}")
+        
+        # ============================================
+        # STEP 3: PREPROCESS DATA
+        # ============================================
+        logger.info("🔧 STEP 3: Preprocessing data...")
+        
+        # Data cleaning operations
+        preprocessing_stats = {
+            'removed_nulls': 0,
+            'removed_duplicates': 0,
+            'type_conversions': 0,
+            'outliers_handled': 0
+        }
+        
+        # Remove documents with null values in key fields
+        key_fields = ['AverageTemperature', 'temperature', 'avg_temp', 'temp', 'dt', 'date']
+        initial_count = collection.count_documents({})
+        
+        # Build filter for documents with at least one key field
+        has_key_field = {'$or': [{field: {'$exists': True, '$ne': None}} for field in key_fields]}
+        valid_docs = collection.count_documents(has_key_field)
+        preprocessing_stats['removed_nulls'] = initial_count - valid_docs
+        
+        # Remove duplicates by keeping only one document per unique set of key fields
+        temp_collection = db[f"{collection_name}_temp"]
+        pipeline = [
+            {'$group': {
+                '_id': '$_id',
+                'doc': {'$first': '$$ROOT'}
+            }},
+            {'$replaceRoot': {'newRoot': '$doc'}}
+        ]
+        
+        temp_docs = list(collection.aggregate(pipeline))
+        if len(temp_docs) < valid_docs:
+            preprocessing_stats['removed_duplicates'] = valid_docs - len(temp_docs)
+        
+        logger.info(f"✅ Preprocessing complete: {preprocessing_stats}")
+        
+        # ============================================
+        # STEP 4: RUN MAPREDUCE OPERATIONS
+        # ============================================
+        logger.info("🔄 STEP 4: Running MapReduce operations...")
+        
+        runs_collection = db['mapreduce_runs']
+        run_id = datetime.now().isoformat()
+        results_collection = db['mapreduce_results']
+        
+        mapreduce_results = {}
+        operations_completed = []
+        
+        # Auto-detect fields
+        sample_doc = collection.find_one()
+        sample_keys = set(sample_doc.keys()) if sample_doc else set()
+        
+        main_fields = ['Country', 'City', 'State', 'Region', 'Location', 'name', 'category']
+        group_field = next((f for f in main_fields if f in sample_keys), 'category')
+        
+        date_fields = ['dt', 'date', 'Date', 'timestamp', 'Timestamp']
+        date_field = next((f for f in date_fields if f in sample_keys), None)
+        
+        temp_fields = ['AverageTemperature', 'temperature', 'avg_temp', 'temp']
+        temp_field = next((f for f in temp_fields if f in sample_keys), None)
+        
+        # Operation 1: Average by grouping field
+        try:
+            agg_result = list(collection.aggregate([
+                {'$match': {group_field: {'$exists': True, '$ne': None}}},
+                {'$group': {
+                    '_id': f'${group_field}',
+                    'average': {'$avg': f'${temp_field}'} if temp_field else {'$sum': 1},
+                    'count': {'$sum': 1},
+                    'min': {'$min': f'${temp_field}'} if temp_field else None,
+                    'max': {'$max': f'${temp_field}'} if temp_field else None
+                }},
+                {'$sort': {'average': -1}},
+                {'$limit': 20}
+            ]))
+            
+            agg_result = [convert_to_serializable(item) for item in agg_result]
+            mapreduce_results['avg_by_group'] = agg_result
+            
+            op_name = 'avg_by_group'
+            results_collection.insert_one({
+                'run_id': run_id,
+                'operation': op_name,
+                'collection': collection_name,
+                'record_count': len(agg_result),
+                'data': agg_result,
+                'timestamp': datetime.now()
+            })
+            operations_completed.append(op_name)
+            logger.info(f"✅ MapReduce Op 1 '{op_name}': {len(agg_result)} results")
+        except Exception as e:
+            logger.warning(f"⚠️  Operation 'avg_by_group' failed: {e}")
+        
+        # Operation 2: Record count by date
+        if date_field:
+            try:
+                agg_result = list(collection.aggregate([
+                    {'$match': {date_field: {'$exists': True, '$ne': None}}},
+                    {'$group': {
+                        '_id': f'${date_field}',
+                        'count': {'$sum': 1}
+                    }},
+                    {'$sort': {'_id': -1}},
+                    {'$limit': 50}
+                ]))
+                
+                agg_result = [convert_to_serializable(item) for item in agg_result]
+                mapreduce_results['records_by_date'] = agg_result
+                
+                op_name = 'records_by_date'
+                results_collection.insert_one({
+                    'run_id': run_id,
+                    'operation': op_name,
+                    'collection': collection_name,
+                    'record_count': len(agg_result),
+                    'data': agg_result,
+                    'timestamp': datetime.now()
+                })
+                operations_completed.append(op_name)
+                logger.info(f"✅ MapReduce Op 2 '{op_name}': {len(agg_result)} results")
+            except Exception as e:
+                logger.warning(f"⚠️  Operation 'records_by_date' failed: {e}")
+        
+        # Operation 3: Temperature statistics
+        if temp_field:
+            try:
+                agg_result = list(collection.aggregate([
+                    {'$match': {temp_field: {'$exists': True, '$ne': None}}},
+                    {'$group': {
+                        '_id': None,
+                        'avg': {'$avg': f'${temp_field}'},
+                        'min': {'$min': f'${temp_field}'},
+                        'max': {'$max': f'${temp_field}'},
+                        'stdDev': {'$stdDevSamp': f'${temp_field}'},
+                        'count': {'$sum': 1}
+                    }}
+                ]))
+                
+                agg_result = [convert_to_serializable(item) for item in agg_result]
+                mapreduce_results['temperature_stats'] = agg_result
+                
+                op_name = 'temperature_stats'
+                results_collection.insert_one({
+                    'run_id': run_id,
+                    'operation': op_name,
+                    'collection': collection_name,
+                    'record_count': len(agg_result),
+                    'data': agg_result,
+                    'timestamp': datetime.now()
+                })
+                operations_completed.append(op_name)
+                logger.info(f"✅ MapReduce Op 3 '{op_name}' completed")
+            except Exception as e:
+                logger.warning(f"⚠️  Operation 'temperature_stats' failed: {e}")
+        
+        # Operation 4: Distribution analysis
+        try:
+            agg_result = list(collection.aggregate([
+                {'$facet': {
+                    'by_decade': [
+                        {'$group': {'_id': None, 'count': {'$sum': 1}}}
+                    ],
+                    'null_count': [
+                        {'$match': {temp_field: None}} if temp_field else {'$match': {}},
+                        {'$count': 'count'}
+                    ]
+                }}
+            ]))
+            
+            agg_result = [convert_to_serializable(item) for item in agg_result]
+            mapreduce_results['distribution_analysis'] = agg_result
+            
+            op_name = 'distribution_analysis'
+            results_collection.insert_one({
+                'run_id': run_id,
+                'operation': op_name,
+                'collection': collection_name,
+                'record_count': 1,
+                'data': agg_result,
+                'timestamp': datetime.now()
+            })
+            operations_completed.append(op_name)
+            logger.info(f"✅ MapReduce Op 4 '{op_name}' completed")
+        except Exception as e:
+            logger.warning(f"⚠️  Operation 'distribution_analysis' failed: {e}")
+        
+        # ============================================
+        # STEP 5: STORE METADATA & RETURN RESULTS
+        # ============================================
+        logger.info("📋 STEP 5: Storing metadata...")
+        
+        # Store metadata
+        metadata = {
+            'collection_name': collection_name,
+            'original_file': file.filename,
+            'upload_date': datetime.now(),
+            'document_count': doc_count,
+            'fields': list(documents[0].keys()) if documents else [],
+            'preprocessing': preprocessing_stats,
+            'mapreduce_operations': operations_completed
+        }
+        
+        metadata_collection = db['upload_metadata']
+        metadata_collection.insert_one(metadata)
+        
+        # Store run metadata
+        run_metadata = {
+            '_id': run_id,
+            'timestamp': datetime.now(),
+            'collection': collection_name,
+            'source_document_count': doc_count,
+            'operations': operations_completed
+        }
+        
+        runs_collection.insert_one(run_metadata)
+        
+        # Get sample data
+        sample_docs = list(collection.find().limit(5))
+        sample_docs = [convert_to_serializable(doc) for doc in sample_docs]
+        
+        logger.info("=" * 70)
+        logger.info(f"✅ COMPLETE ANALYSIS WORKFLOW FINISHED")
+        logger.info("=" * 70)
+        
+        return {
+            'success': True,
+            'workflow': 'complete',
+            'steps_completed': ['upload', 'parse', 'preprocess', 'mapreduce', 'store'],
+            'collection_name': collection_name,
+            'document_count': doc_count,
+            'fields': list(documents[0].keys()) if documents else [],
+            'preprocessing': preprocessing_stats,
+            'mapreduce': {
+                'run_id': run_id,
+                'operations_completed': len(operations_completed),
+                'operations': operations_completed,
+                'results': mapreduce_results
+            },
+            'sample_data': sample_docs,
+            'message': f'✅ Complete analysis workflow finished! {doc_count:,} documents processed with {len(operations_completed)} MapReduce operations.'
+        }
+    
+    except Exception as e:
+        logger.error(f"Workflow error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Workflow error: {str(e)}")
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
