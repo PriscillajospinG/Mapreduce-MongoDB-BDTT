@@ -4,6 +4,7 @@ import { Dashboard } from './pages/Dashboard'
 import { Analytics } from './pages/Analytics'
 import { UploadPage } from './pages/Upload'
 import { SettingsPage } from './pages/Settings'
+import { QuickAnalysis } from './pages/QuickAnalysis'
 import './index.css'
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/upload" element={<UploadPage />} />
+          <Route path="/quick-analysis" element={<QuickAnalysis />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </div>

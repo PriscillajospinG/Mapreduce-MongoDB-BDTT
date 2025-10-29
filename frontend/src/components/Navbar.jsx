@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Gauge, BarChart3, Download, Settings, Thermometer } from 'lucide-react'
+import { Gauge, BarChart3, Download, Settings, Thermometer, Zap } from 'lucide-react'
 
 export function Navbar() {
   const location = useLocation()
@@ -8,6 +8,7 @@ export function Navbar() {
 
   const navItems = [
     { path: '/', label: 'Dashboard', icon: Gauge },
+    { path: '/quick-analysis', label: 'Quick Analysis', icon: Zap },
     { path: '/analytics', label: 'Analytics', icon: BarChart3 },
     { path: '/upload', label: 'Upload', icon: Download },
     { path: '/settings', label: 'Settings', icon: Settings }

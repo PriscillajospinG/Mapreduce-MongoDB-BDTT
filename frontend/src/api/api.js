@@ -4,12 +4,19 @@ const API_BASE_URL = '/api'
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000
+  timeout: 60000
 })
 
 export const climateAPI = {
   // Health check
   getHealth: () => api.get('/health'),
+
+  // Complete pipeline: Upload + Preprocess + MapReduce + Visualize
+  completePipeline: (formData) => {
+    return api.post('/complete-pipeline', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
 
   // Dataset operations
   uploadDataset: (file, datasetName) => {
