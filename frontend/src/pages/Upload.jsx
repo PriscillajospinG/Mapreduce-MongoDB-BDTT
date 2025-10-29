@@ -3,7 +3,7 @@ import { Upload, CheckCircle, AlertCircle, Loader } from 'lucide-react'
 import { DatasetUpload } from '../components/DatasetUpload'
 import { climateAPI } from '../api/api'
 
-export function Upload() {
+export function UploadPage() {
   const [uploadStatus, setUploadStatus] = useState(null)
   const [preprocessing, setPreprocessing] = useState(false)
   const [runningMapReduce, setRunningMapReduce] = useState(false)

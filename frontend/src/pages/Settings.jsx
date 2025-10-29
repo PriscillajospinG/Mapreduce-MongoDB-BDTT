@@ -1,6 +1,6 @@
 import { Settings, Database, Zap, Eye } from 'lucide-react'
 
-export function Settings() {
+export function SettingsPage() {
   return (
     <div className="container">
       <h1 className="section-title flex items-center gap-2">
