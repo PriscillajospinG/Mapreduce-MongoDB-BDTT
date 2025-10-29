@@ -1,29 +1,46 @@
 """
-Flask API Server for Climate Analysis
-Bridges React frontend with Python MapReduce backend
+FastAPI Server for Climate Analysis
+High-performance async API bridging React frontend with MongoDB
 """
 
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import os
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from datetime import datetime
 import logging
+import os
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
+import uvicorn
+from typing import Optional, List, Dict, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+# Initialize FastAPI app
+app = FastAPI(
+    title="Climate Analysis API",
+    description="MapReduce operations on climate data stored in MongoDB",
+    version="1.0.0"
+)
 
-# MongoDB Connection with fallback to mock data
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# MongoDB Connection
 db = None
 mongo_available = False
+
 try:
     from config import MONGO_URI, DATABASE_NAME
     mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    # Test connection
     mongo_client.server_info()
     db = mongo_client[DATABASE_NAME]
     mongo_available = True
@@ -35,59 +52,100 @@ except Exception as e:
     logger.warning(f"⚠️  MongoDB connection issue: {e} - using mock data")
     mongo_available = False
 
-# Enable CORS properly
-CORS(app, 
-     origins=["http://localhost:3000", "http://localhost:5001", "http://127.0.0.1:3000"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-     allow_headers=["Content-Type", "Authorization"],
-     supports_credentials=True)
-
 # Configuration
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 
 # ============================================================================
 # HEALTH & STATUS ENDPOINTS
 # ============================================================================
 
-@app.route('/api/health', methods=['GET'])
-def health():
+@app.get('/api/health')
+async def health():
     """Health check endpoint"""
-    return jsonify({
+    return {
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'backend': 'MongoDB with PySpark'
-    })
+        'backend': 'FastAPI with MongoDB',
+        'mongo_available': mongo_available
+    }
 
 
 # ============================================================================
 # STATISTICS ENDPOINTS
 # ============================================================================
 
-@app.route('/api/stats/summary', methods=['GET'])
-def get_summary_stats():
+@app.get('/api/stats/summary')
+async def get_summary_stats():
     """Get summary statistics"""
-    # This would connect to your MongoDB/PySpark backend
-    return jsonify({
-        'total_records': 10500000,
-        'dataset_count': 5,
-        'avg_temperature': 14.2,
-        'last_updated': datetime.now().isoformat(),
-        'datasets': {
-            'country': {'records': 577000, 'status': 'ready'},
-            'city': {'records': 8600000, 'status': 'ready'},
-            'state': {'records': 645000, 'status': 'ready'},
-            'major_city': {'records': 239000, 'status': 'ready'},
-            'global': {'records': 3300, 'status': 'ready'}
+    if not mongo_available or db is None:
+        logger.warning("MongoDB not available, returning mock data")
+        return {
+            'total_records': 10500000,
+            'dataset_count': 5,
+            'avg_temperature': 14.2,
+            'last_updated': datetime.now().isoformat(),
+            'datasets': {
+                'country': {'records': 577000, 'status': 'ready'},
+                'city': {'records': 8600000, 'status': 'ready'},
+                'state': {'records': 645000, 'status': 'ready'},
+                'major_city': {'records': 239000, 'status': 'ready'},
+                'global': {'records': 3300, 'status': 'ready'}
+            }
         }
-    })
+    
+    try:
+        collections_info = {
+            'country': 'country_temps',
+            'city': 'city_temps',
+            'state': 'state_temps',
+            'major_city': 'major_city_temps',
+            'global': 'global_temps'
+        }
+        
+        datasets = {}
+        total_records = 0
+        total_temp = 0
+        count_for_avg = 0
+        
+        for key, coll_name in collections_info.items():
+            try:
+                collection = db[coll_name]
+                count = collection.count_documents({})
+                datasets[key] = {'records': count, 'status': 'ready'}
+                total_records += count
+                
+                avg_result = list(collection.aggregate([
+                    {'$group': {'_id': None, 'avg': {'$avg': '$AverageTemperature'}}}
+                ]))
+                if avg_result and avg_result[0].get('avg'):
+                    total_temp += avg_result[0]['avg'] * count
+                    count_for_avg += count
+            except Exception as e:
+                logger.warning(f"Error getting stats for {coll_name}: {e}")
+                datasets[key] = {'records': 0, 'status': 'error'}
+        
+        avg_temp = round(total_temp / count_for_avg, 2) if count_for_avg > 0 else 0
+        
+        logger.info(f"✅ Summary: {total_records:,} records, avg temp: {avg_temp}°C")
+        return {
+            'total_records': total_records,
+            'dataset_count': len(datasets),
+            'avg_temperature': avg_temp,
+            'last_updated': datetime.now().isoformat(),
+            'datasets': datasets
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching summary stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/stats/dataset-info', methods=['GET'])
-def get_dataset_info():
+@app.get('/api/stats/dataset-info')
+async def get_dataset_info():
     """Get detailed dataset information"""
-    return jsonify({
+    return {
         'datasets': [
             {
                 'name': 'Country',
@@ -120,33 +178,27 @@ def get_dataset_info():
                 'date_range': '1750-2016'
             }
         ]
-    })
+    }
 
 
 # ============================================================================
 # ANALYTICS ENDPOINTS (MapReduce Results)
 # ============================================================================
 
-@app.route('/api/analytics/avg-temp-by-country', methods=['GET'])
-def get_avg_temp_by_country():
+@app.get('/api/analytics/avg-temp-by-country')
+async def get_avg_temp_by_country():
     """Get average temperature by country (MapReduce Op 1)"""
     if not mongo_available or db is None:
         logger.warning("MongoDB not available, returning mock data")
-        return jsonify([
+        return [
             {'Country': 'Burundi', 'average': 23.84, 'min': 19.7, 'max': 26.6, 'count': 3000},
             {'Country': 'Djibouti', 'average': 28.25, 'min': 24.2, 'max': 31.8, 'count': 3100},
             {'Country': 'Mauritania', 'average': 28.91, 'min': 25.1, 'max': 32.4, 'count': 3200},
             {'Country': 'Mali', 'average': 28.83, 'min': 25.0, 'max': 32.2, 'count': 3300},
             {'Country': 'Senegal', 'average': 28.68, 'min': 25.2, 'max': 31.9, 'count': 3100},
-            {'Country': 'Thailand', 'average': 27.20, 'min': 23.5, 'max': 30.8, 'count': 3400},
-            {'Country': 'Bangladesh', 'average': 26.15, 'min': 22.1, 'max': 29.7, 'count': 3200},
-            {'Country': 'Nigeria', 'average': 26.42, 'min': 22.8, 'max': 29.5, 'count': 3300},
-            {'Country': 'Sudan', 'average': 26.70, 'min': 23.2, 'max': 30.1, 'count': 3100},
-            {'Country': 'Congo (Democratic Republic)', 'average': 25.03, 'min': 21.5, 'max': 28.6, 'count': 3200},
-        ])
+        ]
 
     try:
-        # Use aggregation pipeline for MapReduce operation
         collection = db['country_temps']
         pipeline = [
             {'$group': {
@@ -170,28 +222,23 @@ def get_avg_temp_by_country():
         
         results = list(collection.aggregate(pipeline))
         logger.info(f"✅ Fetched avg temp by country: {len(results)} records")
-        return jsonify(results)
+        return results
     
     except Exception as e:
         logger.error(f"Error fetching avg temp by country: {e}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/analytics/temp-trends-by-year', methods=['GET'])
-def get_temp_trends_by_year():
+@app.get('/api/analytics/temp-trends-by-year')
+async def get_temp_trends_by_year():
     """Get temperature trends by year (MapReduce Op 2)"""
     if not mongo_available or db is None:
         logger.warning("MongoDB not available, returning mock data")
-        return jsonify([
+        return [
             {'year': 1950, 'average': 13.5, 'min': -50.2, 'max': 48.3, 'count': 50000},
             {'year': 1960, 'average': 13.6, 'min': -51.1, 'max': 49.1, 'count': 75000},
             {'year': 1970, 'average': 13.7, 'min': -50.5, 'max': 49.5, 'count': 150000},
-            {'year': 1980, 'average': 13.85, 'min': -51.0, 'max': 50.2, 'count': 250000},
-            {'year': 1990, 'average': 14.15, 'min': -50.8, 'max': 50.5, 'count': 500000},
-            {'year': 2000, 'average': 14.35, 'min': -51.2, 'max': 51.0, 'count': 750000},
-            {'year': 2010, 'average': 14.55, 'min': -52.0, 'max': 51.5, 'count': 1000000},
-            {'year': 2016, 'average': 14.72, 'min': -52.5, 'max': 52.0, 'count': 1200000},
-        ])
+        ]
 
     try:
         collection = db['country_temps']
@@ -217,24 +264,24 @@ def get_temp_trends_by_year():
         
         results = list(collection.aggregate(pipeline))
         logger.info(f"✅ Fetched temp trends by year: {len(results)} records")
-        return jsonify(results)
+        return results
     
     except Exception as e:
         logger.error(f"Error fetching temp trends by year: {e}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/analytics/seasonal-analysis', methods=['GET'])
-def get_seasonal_analysis():
+@app.get('/api/analytics/seasonal-analysis')
+async def get_seasonal_analysis():
     """Get seasonal analysis (MapReduce Op 3)"""
     if not mongo_available or db is None:
         logger.warning("MongoDB not available, returning mock data")
-        return jsonify([
+        return [
             {'season': 'Winter', 'average': 10.2, 'min': -45.0, 'max': 35.5, 'count': 2500000},
             {'season': 'Spring', 'average': 14.1, 'min': -30.0, 'max': 42.0, 'count': 2600000},
             {'season': 'Summer', 'average': 18.5, 'min': -20.0, 'max': 52.0, 'count': 2700000},
             {'season': 'Fall', 'average': 14.8, 'min': -35.0, 'max': 45.0, 'count': 2500000},
-        ])
+        ]
 
     try:
         collection = db['country_temps']
@@ -273,30 +320,27 @@ def get_seasonal_analysis():
         
         results = list(collection.aggregate(pipeline))
         logger.info(f"✅ Fetched seasonal analysis: {len(results)} records")
-        return jsonify(results)
+        return results
     
     except Exception as e:
         logger.error(f"Error fetching seasonal analysis: {e}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/analytics/extreme-temps', methods=['GET'])
-def get_extreme_temps():
+@app.get('/api/analytics/extreme-temps')
+async def get_extreme_temps():
     """Get extreme temperatures (MapReduce Op 4)"""
     if not mongo_available or db is None:
         logger.warning("MongoDB not available, returning mock data")
-        return jsonify([
+        return [
             {'dt': '1922-07-21', 'Country': 'Tunisia', 'AverageTemperature': 55.0, 'type': 'Warmest'},
             {'dt': '1954-02-06', 'Country': 'Antarctica', 'AverageTemperature': -89.2, 'type': 'Coldest'},
             {'dt': '2010-07-10', 'Country': 'USA', 'AverageTemperature': 54.0, 'type': 'Warmest'},
-            {'dt': '2020-01-15', 'Country': 'Siberia', 'AverageTemperature': -71.0, 'type': 'Coldest'},
-            {'dt': '2015-08-30', 'Country': 'Middle East', 'AverageTemperature': 53.9, 'type': 'Warmest'},
-        ])
+        ]
 
     try:
         collection = db['country_temps']
         
-        # Get warmest temperatures
         pipeline_warm = [
             {'$sort': {'AverageTemperature': -1}},
             {'$limit': 5},
@@ -304,7 +348,6 @@ def get_extreme_temps():
             {'$project': {'dt': 1, 'Country': 1, 'AverageTemperature': {'$round': ['$AverageTemperature', 2]}, 'type': 1, '_id': 0}}
         ]
         
-        # Get coldest temperatures
         pipeline_cold = [
             {'$sort': {'AverageTemperature': 1}},
             {'$limit': 5},
@@ -317,45 +360,64 @@ def get_extreme_temps():
         
         results = warmest + coldest
         logger.info(f"✅ Fetched extreme temps: {len(results)} records")
-        return jsonify(results)
+        return results
     
     except Exception as e:
         logger.error(f"Error fetching extreme temps: {e}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/analytics/decade-analysis', methods=['GET'])
-def get_decade_analysis():
+@app.get('/api/analytics/decade-analysis')
+async def get_decade_analysis():
     """Get decade analysis (MapReduce Op 5)"""
-    return jsonify([
-        {'decade': 1750, 'average': 12.5, 'count': 10000},
-        {'decade': 1760, 'average': 12.3, 'count': 12000},
-        {'decade': 1800, 'average': 12.8, 'count': 25000},
-        {'decade': 1850, 'average': 13.2, 'count': 50000},
-        {'decade': 1900, 'average': 13.5, 'count': 100000},
-        {'decade': 1950, 'average': 13.7, 'count': 200000},
-        {'decade': 2000, 'average': 14.4, 'count': 500000},
-        {'decade': 2010, 'average': 14.65, 'count': 1000000},
-    ])
+    if not mongo_available or db is None:
+        logger.warning("MongoDB not available, returning mock data")
+        return [
+            {'decade': 1750, 'average': 12.5, 'count': 10000},
+            {'decade': 1800, 'average': 12.8, 'count': 25000},
+            {'decade': 1900, 'average': 13.5, 'count': 100000},
+            {'decade': 2000, 'average': 14.4, 'count': 500000},
+        ]
+
+    try:
+        collection = db['country_temps']
+        pipeline = [
+            {'$addFields': {'year': {'$year': {'$dateFromString': {'dateString': '$dt'}}}}},
+            {'$addFields': {'decade': {'$multiply': [{'$floor': {'$divide': ['$year', 10]}}, 10]}}},
+            {'$group': {
+                '_id': '$decade',
+                'average': {'$avg': '$AverageTemperature'},
+                'count': {'$sum': 1}
+            }},
+            {'$sort': {'_id': 1}},
+            {'$project': {
+                'decade': '$_id',
+                'average': {'$round': ['$average', 2]},
+                'count': 1,
+                '_id': 0
+            }}
+        ]
+
+        results = list(collection.aggregate(pipeline))
+        logger.info(f"✅ Fetched decade analysis: {len(results)} records")
+        return results
+
+    except Exception as e:
+        logger.error(f"Error fetching decade analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/analytics/records-by-country', methods=['GET'])
-def get_records_by_country():
+@app.get('/api/analytics/records-by-country')
+async def get_records_by_country():
     """Get records per country (MapReduce Op 6)"""
     if not mongo_available or db is None:
         logger.warning("MongoDB not available, returning mock data")
-        return jsonify([
+        return [
             {'Country': 'Sweden', 'record_count': 35000},
             {'Country': 'France', 'record_count': 32000},
             {'Country': 'Germany', 'record_count': 31000},
             {'Country': 'USA', 'record_count': 30000},
-            {'Country': 'Brazil', 'record_count': 29000},
-            {'Country': 'India', 'record_count': 28000},
-            {'Country': 'China', 'record_count': 27000},
-            {'Country': 'Russia', 'record_count': 26000},
-            {'Country': 'Australia', 'record_count': 25000},
-            {'Country': 'Japan', 'record_count': 24000},
-        ])
+        ]
 
     try:
         collection = db['country_temps']
@@ -375,94 +437,85 @@ def get_records_by_country():
         
         results = list(collection.aggregate(pipeline))
         logger.info(f"✅ Fetched records by country: {len(results)} records")
-        return jsonify(results)
+        return results
     
     except Exception as e:
         logger.error(f"Error fetching records by country: {e}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
 # DATA OPERATIONS ENDPOINTS
 # ============================================================================
 
-@app.route('/api/upload', methods=['POST'])
-def upload_dataset():
+@app.post('/api/upload')
+async def upload_dataset(file: UploadFile = File(...)):
     """Upload dataset CSV file"""
     try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
-
-        file = request.files['file']
-        dataset_name = request.form.get('dataset_name', 'unknown')
-
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
-
         if not file.filename.endswith('.csv'):
-            return jsonify({'error': 'Only CSV files are supported'}), 400
+            raise HTTPException(status_code=400, detail="Only CSV files are supported")
 
-        # Save file
-        filename = f"{dataset_name}_{datetime.now().timestamp()}.csv"
+        filename = f"{datetime.now().timestamp()}_{file.filename}"
         filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
+        
+        with open(filepath, "wb") as f:
+            content = await file.read()
+            f.write(content)
 
         logger.info(f"File uploaded: {filename}")
 
-        return jsonify({
-            'message': f'Dataset {dataset_name} uploaded successfully',
+        return {
+            'message': f'Dataset uploaded successfully',
             'filename': filename,
-            'size': os.path.getsize(filepath),
+            'size': len(content),
             'timestamp': datetime.now().isoformat()
-        }), 201
+        }
 
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/preprocess/<dataset_name>', methods=['POST'])
-def preprocess_data(dataset_name):
+@app.post('/api/preprocess/{dataset_name}')
+async def preprocess_data(dataset_name: str):
     """Preprocess dataset"""
     try:
         logger.info(f"Preprocessing {dataset_name}")
         
-        # This would call your PySpark preprocessing script
-        return jsonify({
+        return {
             'message': f'{dataset_name} dataset preprocessing started',
             'dataset': dataset_name,
             'status': 'processing',
             'timestamp': datetime.now().isoformat()
-        }), 200
+        }
 
     except Exception as e:
         logger.error(f"Preprocessing error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/mapreduce/run', methods=['POST'])
-def run_mapreduce():
+@app.post('/api/mapreduce/run')
+async def run_mapreduce():
     """Run MapReduce operations"""
     try:
         logger.info("Starting MapReduce operations")
         
-        # This would call your MapReduce execution
-        return jsonify({
+        return {
             'message': 'MapReduce operations started',
             'operations': 6,
             'status': 'running',
             'timestamp': datetime.now().isoformat()
-        }), 200
+        }
 
     except Exception as e:
         logger.error(f"MapReduce error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/api/mapreduce/status', methods=['GET'])
-def mapreduce_status():
+@app.get('/api/mapreduce/status')
+async def mapreduce_status():
     """Get MapReduce operation status"""
-    return jsonify({
+    return {
         'status': 'completed',
         'operations': 6,
         'completed': 6,
@@ -476,34 +529,23 @@ def mapreduce_status():
             'decade_analysis': 'completed',
             'records_by_country': 'completed'
         }
-    })
-
-
-# ============================================================================
-# ERROR HANDLERS
-# ============================================================================
-
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({'error': 'Endpoint not found'}), 404
-
-
-@app.errorhandler(500)
-def internal_error(error):
-    logger.error(f"Internal error: {str(error)}")
-    return jsonify({'error': 'Internal server error'}), 500
+    }
 
 
 # ============================================================================
 # MAIN
 # ============================================================================
 
+
 if __name__ == '__main__':
-    logger.info("=" * 60)
-    logger.info("Climate Analysis API Server")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("🚀 Climate Analysis FastAPI Server")
+    logger.info("=" * 70)
     logger.info(f"Frontend: http://localhost:3000")
     logger.info(f"API: http://localhost:5001")
+    logger.info(f"Docs: http://localhost:5001/docs")
     logger.info(f"MongoDB: {'✅ Connected' if mongo_available else '⚠️  Using Mock Data'}")
-    logger.info("=" * 60)
-    app.run(debug=True, port=5001, host='0.0.0.0')
+    logger.info("=" * 70)
+    
+    uvicorn.run(app, host="0.0.0.0", port=5001, reload=False, log_level="info")
+
