@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { Gauge, BarChart3, Download, Settings, Thermometer, Github, ExternalLink } from 'lucide-react'
+import { Gauge, BarChart3, Download, Settings, Thermometer, Github, ExternalLink, Database } from 'lucide-react'
 import { useState } from 'react'
 
 export function Navbar() {
@@ -12,6 +12,7 @@ export function Navbar() {
     { path: '/', label: 'Dashboard', icon: Gauge },
     { path: '/analytics', label: 'Analytics', icon: BarChart3 },
     { path: '/upload', label: 'Upload', icon: Download },
+    { path: '/collections', label: 'Collections', icon: Database },
     { path: '/settings', label: 'Settings', icon: Settings }
   ]
 

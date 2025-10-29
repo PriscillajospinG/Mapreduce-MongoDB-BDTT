@@ -4,7 +4,7 @@ const API_BASE_URL = '/api'
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000
+  timeout: 30000
 })
 
 export const climateAPI = {
@@ -20,6 +20,26 @@ export const climateAPI = {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
   },
+
+  // CSV Upload to MongoDB as JSON
+  uploadCSVToMongoDB: (formData) => {
+    return api.post('/upload/csv', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+
+  // Get uploaded collections
+  getUploadedCollections: () => api.get('/uploaded-collections'),
+
+  // Get collection data
+  getCollectionData: (collectionName, limit = 10) => 
+    api.get(`/collection/${collectionName}`, { params: { limit } }),
+
+  // Run MapReduce on specific collection
+  runMapReduceOnCollection: (collectionName) => 
+    api.post(`/mapreduce/run-on-collection`, null, { 
+      params: { collection_name: collectionName } 
+    }),
 
   // Analytics
   getAverageTempByCountry: () => api.get('/analytics/avg-temp-by-country'),

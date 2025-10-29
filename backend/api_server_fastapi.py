@@ -824,6 +824,311 @@ async def get_mapreduce_history():
 
 
 # ============================================================================
+# CSV UPLOAD TO MONGODB AS JSON
+# ============================================================================
+
+@app.post('/api/upload/csv')
+async def upload_csv(file: UploadFile = File(...)):
+    """Upload CSV file and store as JSON in MongoDB collection"""
+    if not mongo_available or db is None:
+        raise HTTPException(status_code=500, detail="MongoDB not available")
+    
+    import csv
+    from io import StringIO
+    import re
+    
+    try:
+        # Read file content
+        content = await file.read()
+        text = content.decode('utf-8')
+        
+        # Validate CSV format
+        csv_reader = csv.DictReader(StringIO(text))
+        if not csv_reader.fieldnames:
+            raise ValueError("CSV file is empty or invalid")
+        
+        # Generate collection name from filename (remove extension, lowercase, replace spaces)
+        file_name = file.filename.rsplit('.', 1)[0]
+        collection_name = f"uploaded_{re.sub(r'[^a-z0-9_]', '_', file_name.lower())}"
+        
+        logger.info(f"📊 Processing CSV: {file.filename} → MongoDB collection: {collection_name}")
+        
+        # Parse CSV and convert to documents
+        collection = db[collection_name]
+        documents = []
+        row_count = 0
+        
+        for row in csv_reader:
+            # Clean and convert data types
+            doc = {}
+            for key, value in row.items():
+                if key and value:  # Skip empty keys/values
+                    # Try to convert to appropriate types
+                    if value.lower() in ['true', 'false']:
+                        doc[key] = value.lower() == 'true'
+                    elif value.lower() in ['null', 'none', '']:
+                        doc[key] = None
+                    else:
+                        try:
+                            # Try float conversion
+                            if '.' in value:
+                                doc[key] = float(value)
+                            else:
+                                # Try int conversion
+                                doc[key] = int(value)
+                        except ValueError:
+                            # Keep as string if not numeric
+                            doc[key] = value
+            
+            if doc:  # Only add non-empty documents
+                documents.append(doc)
+                row_count += 1
+        
+        if not documents:
+            raise ValueError("No valid data found in CSV file")
+        
+        # Insert documents into MongoDB
+        result = collection.insert_many(documents)
+        
+        # Create index on common fields if they exist
+        if '_id' not in collection.index_information():
+            collection.create_index('_id')
+        
+        # Get sample data
+        sample_docs = list(collection.find().limit(5))
+        
+        # Store metadata
+        metadata = {
+            'collection_name': collection_name,
+            'original_file': file.filename,
+            'upload_date': datetime.now(),
+            'document_count': len(result.inserted_ids),
+            'fields': list(documents[0].keys()) if documents else []
+        }
+        
+        metadata_collection = db['upload_metadata']
+        metadata_collection.insert_one(metadata)
+        
+        logger.info(f"✅ Uploaded {len(result.inserted_ids):,} documents to '{collection_name}'")
+        
+        return {
+            'success': True,
+            'collection_name': collection_name,
+            'document_count': len(result.inserted_ids),
+            'fields': list(documents[0].keys()) if documents else [],
+            'sample_data': sample_docs,
+            'message': f"Successfully uploaded {len(result.inserted_ids):,} records to collection '{collection_name}'"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error uploading CSV: {e}")
+        raise HTTPException(status_code=400, detail=f"Error uploading CSV: {str(e)}")
+
+
+@app.get('/api/uploaded-collections')
+async def get_uploaded_collections():
+    """Get list of all uploaded collections"""
+    if not mongo_available or db is None:
+        raise HTTPException(status_code=500, detail="MongoDB not available")
+    
+    try:
+        metadata_collection = db['upload_metadata']
+        uploads = list(metadata_collection.find().sort('upload_date', -1))
+        
+        # Convert ObjectId to string for JSON serialization
+        result = []
+        for upload in uploads:
+            result.append({
+                'collection_name': upload['collection_name'],
+                'original_file': upload['original_file'],
+                'upload_date': upload['upload_date'].isoformat() if hasattr(upload['upload_date'], 'isoformat') else str(upload['upload_date']),
+                'document_count': upload['document_count'],
+                'fields': upload.get('fields', [])
+            })
+        
+        logger.info(f"✅ Retrieved {len(result)} uploaded collections")
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error retrieving uploaded collections: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get('/api/collection/{collection_name}')
+async def get_collection_data(collection_name: str, limit: int = 10):
+    """Get data from a specific collection (uploaded or default)"""
+    if not mongo_available or db is None:
+        raise HTTPException(status_code=500, detail="MongoDB not available")
+    
+    try:
+        collection = db[collection_name]
+        documents = list(collection.find().limit(limit))
+        
+        # Convert ObjectId to string
+        for doc in documents:
+            if '_id' in doc:
+                doc['_id'] = str(doc['_id'])
+        
+        total_count = collection.count_documents({})
+        
+        logger.info(f"✅ Retrieved {len(documents)} documents from collection: {collection_name}")
+        return {
+            'collection_name': collection_name,
+            'document_count': total_count,
+            'documents': documents,
+            'limit': limit
+        }
+    
+    except Exception as e:
+        logger.error(f"Error retrieving collection data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/api/mapreduce/run-on-collection')
+async def run_mapreduce_on_collection(collection_name: str):
+    """Run MapReduce operations on a specific uploaded collection"""
+    if not mongo_available or db is None:
+        raise HTTPException(status_code=500, detail="MongoDB not available")
+    
+    try:
+        collection = db[collection_name]
+        
+        # Check if collection exists and has data
+        doc_count = collection.count_documents({})
+        if doc_count == 0:
+            raise ValueError(f"Collection '{collection_name}' is empty")
+        
+        logger.info(f"🔄 Running MapReduce on collection: {collection_name} ({doc_count:,} documents)")
+        
+        # Store metadata
+        runs_collection = db['mapreduce_runs']
+        run_id = datetime.now().isoformat()
+        
+        run_metadata = {
+            '_id': run_id,
+            'timestamp': datetime.now(),
+            'source_collection': collection_name,
+            'source_document_count': doc_count,
+            'operations': []
+        }
+        
+        results_collection = db['mapreduce_results']
+        operations_completed = []
+        
+        # Define MapReduce operations adapted for uploaded collection
+        # These are simplified versions that work with any temperature-like data
+        
+        # Operation 1: Average by main grouping field
+        main_fields = ['Country', 'City', 'State', 'Region', 'Location', 'name', 'category']
+        group_field = next((f for f in main_fields if f in collection.index_information() or collection.count_documents({f: {'$exists': True}}) > 0), 'category')
+        
+        try:
+            agg_result = list(collection.aggregate([
+                {'$group': {
+                    '_id': f'${group_field}' if group_field else None,
+                    'average': {'$avg': '$AverageTemperature'} if collection.count_documents({'AverageTemperature': {'$exists': True}}) > 0 else {'$avg': '$temperature'},
+                    'count': {'$sum': 1}
+                }},
+                {'$sort': {'average': -1}},
+                {'$limit': 10}
+            ]))
+            
+            op_name = 'avg_temperature'
+            operation_result = {
+                'run_id': run_id,
+                'operation': op_name,
+                'record_count': len(agg_result),
+                'data': agg_result,
+                'timestamp': datetime.now()
+            }
+            results_collection.insert_one(operation_result)
+            operations_completed.append(op_name)
+            logger.info(f"✅ Operation '{op_name}' completed: {len(agg_result)} results")
+        except Exception as e:
+            logger.warning(f"⚠️  Operation 'avg_temperature' failed: {e}")
+        
+        # Operation 2: Record count by time period (if date field exists)
+        try:
+            date_fields = ['dt', 'date', 'Date', 'timestamp', 'Timestamp']
+            date_field = next((f for f in date_fields if collection.count_documents({f: {'$exists': True}}) > 0), None)
+            
+            if date_field:
+                agg_result = list(collection.aggregate([
+                    {'$group': {
+                        '_id': f'${date_field}',
+                        'count': {'$sum': 1}
+                    }},
+                    {'$sort': {'_id': -1}},
+                    {'$limit': 10}
+                ]))
+                
+                op_name = 'records_by_date'
+                operation_result = {
+                    'run_id': run_id,
+                    'operation': op_name,
+                    'record_count': len(agg_result),
+                    'data': agg_result,
+                    'timestamp': datetime.now()
+                }
+                results_collection.insert_one(operation_result)
+                operations_completed.append(op_name)
+                logger.info(f"✅ Operation '{op_name}' completed: {len(agg_result)} results")
+        except Exception as e:
+            logger.warning(f"⚠️  Operation 'records_by_date' failed: {e}")
+        
+        # Operation 3: Temperature statistics
+        try:
+            temp_fields = ['AverageTemperature', 'temperature', 'avg_temp', 'temp']
+            temp_field = next((f for f in temp_fields if collection.count_documents({f: {'$exists': True}}) > 0), None)
+            
+            if temp_field:
+                agg_result = list(collection.aggregate([
+                    {'$group': {
+                        '_id': None,
+                        'avg_temp': {'$avg': f'${temp_field}'},
+                        'min_temp': {'$min': f'${temp_field}'},
+                        'max_temp': {'$max': f'${temp_field}'},
+                        'total_records': {'$sum': 1}
+                    }}
+                ]))
+                
+                op_name = 'temperature_stats'
+                operation_result = {
+                    'run_id': run_id,
+                    'operation': op_name,
+                    'record_count': 1,
+                    'data': agg_result,
+                    'timestamp': datetime.now()
+                }
+                results_collection.insert_one(operation_result)
+                operations_completed.append(op_name)
+                logger.info(f"✅ Operation '{op_name}' completed")
+        except Exception as e:
+            logger.warning(f"⚠️  Operation 'temperature_stats' failed: {e}")
+        
+        # Update run metadata
+        run_metadata['operations'] = operations_completed
+        runs_collection.insert_one(run_metadata)
+        
+        logger.info(f"✅ MapReduce completed on '{collection_name}': {len(operations_completed)} operations")
+        
+        return {
+            'success': True,
+            'message': f"MapReduce completed on collection '{collection_name}'",
+            'collection_name': collection_name,
+            'source_document_count': doc_count,
+            'operations_completed': len(operations_completed),
+            'operations': operations_completed,
+            'run_id': run_id,
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    except Exception as e:
+        logger.error(f"MapReduce error on custom collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"MapReduce error: {str(e)}")
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
