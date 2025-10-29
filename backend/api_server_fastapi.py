@@ -199,6 +199,21 @@ async def get_avg_temp_by_country():
         ]
 
     try:
+        # Try to get from cached MapReduce results first
+        runs_collection = db['mapreduce_runs']
+        latest_run = runs_collection.find_one(sort=[('timestamp', -1)])
+        
+        if latest_run:
+            results_collection = db['mapreduce_results']
+            cached_result = results_collection.find_one({
+                'run_id': latest_run['_id'],
+                'operation': 'avg_temp_by_country'
+            })
+            if cached_result:
+                logger.info(f"✅ Fetched avg temp by country from cache: {len(cached_result['data'])} records")
+                return cached_result['data']
+        
+        # Fall back to live query
         collection = db['country_temps']
         pipeline = [
             {'$group': {
@@ -221,7 +236,7 @@ async def get_avg_temp_by_country():
         ]
         
         results = list(collection.aggregate(pipeline))
-        logger.info(f"✅ Fetched avg temp by country: {len(results)} records")
+        logger.info(f"✅ Fetched avg temp by country from live query: {len(results)} records")
         return results
     
     except Exception as e:
@@ -468,15 +483,226 @@ async def preprocess_data(dataset_name: str):
 
 @app.post('/api/mapreduce/run')
 async def run_mapreduce():
-    """Run MapReduce operations"""
+    """Run MapReduce operations and store results in MongoDB"""
+    if not mongo_available or db is None:
+        raise HTTPException(status_code=500, detail="MongoDB is not available")
+    
     try:
-        logger.info("Starting MapReduce operations")
+        logger.info("🚀 Starting MapReduce operations - storing results in MongoDB")
+        
+        # Create results collection if it doesn't exist
+        results_collection = db['mapreduce_results']
+        
+        # Store metadata for this run
+        run_id = datetime.now().isoformat()
+        run_metadata = {
+            '_id': run_id,
+            'timestamp': datetime.now(),
+            'status': 'completed',
+            'operations': []
+        }
+        
+        try:
+            # Operation 1: Average Temperature by Country
+            avg_temp_pipeline = [
+                {'$group': {
+                    '_id': '$Country',
+                    'average': {'$avg': '$AverageTemperature'},
+                    'min': {'$min': '$AverageTemperature'},
+                    'max': {'$max': '$AverageTemperature'},
+                    'count': {'$sum': 1}
+                }},
+                {'$sort': {'average': -1}},
+                {'$limit': 50},
+                {'$project': {
+                    'Country': '$_id',
+                    'average': {'$round': ['$average', 2]},
+                    'min': {'$round': ['$min', 2]},
+                    'max': {'$round': ['$max', 2]},
+                    'count': 1,
+                    '_id': 0
+                }}
+            ]
+            avg_temp_results = list(db['country_temps'].aggregate(avg_temp_pipeline))
+            results_collection.insert_one({
+                'run_id': run_id,
+                'operation': 'avg_temp_by_country',
+                'timestamp': datetime.now(),
+                'data': avg_temp_results,
+                'record_count': len(avg_temp_results)
+            })
+            run_metadata['operations'].append('avg_temp_by_country')
+            logger.info(f"✅ Stored avg_temp_by_country: {len(avg_temp_results)} records")
+            
+            # Operation 2: Temperature Trends by Year
+            trends_pipeline = [
+                {'$addFields': {'year': {'$year': {'$dateFromString': {'dateString': '$dt'}}}}},
+                {'$group': {
+                    '_id': '$year',
+                    'average': {'$avg': '$AverageTemperature'},
+                    'min': {'$min': '$AverageTemperature'},
+                    'max': {'$max': '$AverageTemperature'},
+                    'count': {'$sum': 1}
+                }},
+                {'$sort': {'_id': 1}},
+                {'$project': {
+                    'year': '$_id',
+                    'average': {'$round': ['$average', 2]},
+                    'min': {'$round': ['$min', 2]},
+                    'max': {'$round': ['$max', 2]},
+                    'count': 1,
+                    '_id': 0
+                }}
+            ]
+            trends_results = list(db['country_temps'].aggregate(trends_pipeline))
+            results_collection.insert_one({
+                'run_id': run_id,
+                'operation': 'temp_trends_by_year',
+                'timestamp': datetime.now(),
+                'data': trends_results,
+                'record_count': len(trends_results)
+            })
+            run_metadata['operations'].append('temp_trends_by_year')
+            logger.info(f"✅ Stored temp_trends_by_year: {len(trends_results)} records")
+            
+            # Operation 3: Seasonal Analysis
+            seasonal_pipeline = [
+                {'$addFields': {'month': {'$month': {'$dateFromString': {'dateString': '$dt'}}}}},
+                {'$addFields': {
+                    'season': {
+                        '$cond': [
+                            {'$in': ['$month', [12, 1, 2]]}, 'Winter',
+                            {'$cond': [
+                                {'$in': ['$month', [3, 4, 5]]}, 'Spring',
+                                {'$cond': [
+                                    {'$in': ['$month', [6, 7, 8]]}, 'Summer',
+                                    'Fall'
+                                ]}
+                            ]}
+                        ]
+                    }
+                }},
+                {'$group': {
+                    '_id': '$season',
+                    'average': {'$avg': '$AverageTemperature'},
+                    'min': {'$min': '$AverageTemperature'},
+                    'max': {'$max': '$AverageTemperature'},
+                    'count': {'$sum': 1}
+                }},
+                {'$project': {
+                    'season': '$_id',
+                    'average': {'$round': ['$average', 2]},
+                    'min': {'$round': ['$min', 2]},
+                    'max': {'$round': ['$max', 2]},
+                    'count': 1,
+                    '_id': 0
+                }}
+            ]
+            seasonal_results = list(db['country_temps'].aggregate(seasonal_pipeline))
+            results_collection.insert_one({
+                'run_id': run_id,
+                'operation': 'seasonal_analysis',
+                'timestamp': datetime.now(),
+                'data': seasonal_results,
+                'record_count': len(seasonal_results)
+            })
+            run_metadata['operations'].append('seasonal_analysis')
+            logger.info(f"✅ Stored seasonal_analysis: {len(seasonal_results)} records")
+            
+            # Operation 4: Extreme Temperatures
+            extreme_warm = list(db['country_temps'].aggregate([
+                {'$sort': {'AverageTemperature': -1}},
+                {'$limit': 5},
+                {'$addFields': {'type': 'Warmest'}},
+                {'$project': {'dt': 1, 'Country': 1, 'AverageTemperature': {'$round': ['$AverageTemperature', 2]}, 'type': 1, '_id': 0}}
+            ]))
+            extreme_cold = list(db['country_temps'].aggregate([
+                {'$sort': {'AverageTemperature': 1}},
+                {'$limit': 5},
+                {'$addFields': {'type': 'Coldest'}},
+                {'$project': {'dt': 1, 'Country': 1, 'AverageTemperature': {'$round': ['$AverageTemperature', 2]}, 'type': 1, '_id': 0}}
+            ]))
+            extreme_results = extreme_warm + extreme_cold
+            results_collection.insert_one({
+                'run_id': run_id,
+                'operation': 'extreme_temps',
+                'timestamp': datetime.now(),
+                'data': extreme_results,
+                'record_count': len(extreme_results)
+            })
+            run_metadata['operations'].append('extreme_temps')
+            logger.info(f"✅ Stored extreme_temps: {len(extreme_results)} records")
+            
+            # Operation 5: Decade Analysis
+            decade_pipeline = [
+                {'$addFields': {'year': {'$year': {'$dateFromString': {'dateString': '$dt'}}}}},
+                {'$addFields': {'decade': {'$multiply': [{'$floor': {'$divide': ['$year', 10]}}, 10]}}},
+                {'$group': {
+                    '_id': '$decade',
+                    'average': {'$avg': '$AverageTemperature'},
+                    'count': {'$sum': 1}
+                }},
+                {'$sort': {'_id': 1}},
+                {'$project': {
+                    'decade': '$_id',
+                    'average': {'$round': ['$average', 2]},
+                    'count': 1,
+                    '_id': 0
+                }}
+            ]
+            decade_results = list(db['country_temps'].aggregate(decade_pipeline))
+            results_collection.insert_one({
+                'run_id': run_id,
+                'operation': 'decade_analysis',
+                'timestamp': datetime.now(),
+                'data': decade_results,
+                'record_count': len(decade_results)
+            })
+            run_metadata['operations'].append('decade_analysis')
+            logger.info(f"✅ Stored decade_analysis: {len(decade_results)} records")
+            
+            # Operation 6: Records per Country
+            records_pipeline = [
+                {'$group': {
+                    '_id': '$Country',
+                    'record_count': {'$sum': 1}
+                }},
+                {'$sort': {'record_count': -1}},
+                {'$limit': 50},
+                {'$project': {
+                    'Country': '$_id',
+                    'record_count': 1,
+                    '_id': 0
+                }}
+            ]
+            records_results = list(db['country_temps'].aggregate(records_pipeline))
+            results_collection.insert_one({
+                'run_id': run_id,
+                'operation': 'records_by_country',
+                'timestamp': datetime.now(),
+                'data': records_results,
+                'record_count': len(records_results)
+            })
+            run_metadata['operations'].append('records_by_country')
+            logger.info(f"✅ Stored records_by_country: {len(records_results)} records")
+            
+        except Exception as e:
+            logger.error(f"Error storing MapReduce results: {e}")
+            run_metadata['status'] = 'error'
+            run_metadata['error'] = str(e)
+        
+        # Store run metadata
+        db['mapreduce_runs'].insert_one(run_metadata)
+        
+        logger.info(f"✅ All MapReduce operations completed and stored with ID: {run_id}")
         
         return {
-            'message': 'MapReduce operations started',
+            'message': 'MapReduce operations completed and stored in MongoDB',
+            'run_id': run_id,
             'operations': 6,
-            'status': 'running',
-            'timestamp': datetime.now().isoformat()
+            'status': 'completed',
+            'timestamp': datetime.now().isoformat(),
+            'operations_list': run_metadata['operations']
         }
 
     except Exception as e:
@@ -486,22 +712,115 @@ async def run_mapreduce():
 
 @app.get('/api/mapreduce/status')
 async def mapreduce_status():
-    """Get MapReduce operation status"""
-    return {
-        'status': 'completed',
-        'operations': 6,
-        'completed': 6,
-        'failed': 0,
-        'timestamp': datetime.now().isoformat(),
-        'results': {
-            'avg_temp_by_country': 'completed',
-            'temp_trends_by_year': 'completed',
-            'seasonal_analysis': 'completed',
-            'extreme_temps': 'completed',
-            'decade_analysis': 'completed',
-            'records_by_country': 'completed'
+    """Get MapReduce operation status and retrieve latest results"""
+    if not mongo_available or db is None:
+        return {
+            'status': 'completed',
+            'operations': 6,
+            'completed': 6,
+            'failed': 0,
+            'timestamp': datetime.now().isoformat()
         }
-    }
+    
+    try:
+        # Get latest run
+        runs_collection = db['mapreduce_runs']
+        latest_run = runs_collection.find_one(sort=[('timestamp', -1)])
+        
+        if not latest_run:
+            return {
+                'status': 'no_data',
+                'message': 'No MapReduce results found yet. Run operations first.',
+                'timestamp': datetime.now().isoformat()
+            }
+        
+        run_id = latest_run['_id']
+        results_collection = db['mapreduce_results']
+        
+        # Retrieve all results for this run
+        stored_results = list(results_collection.find({'run_id': run_id}))
+        
+        return {
+            'status': 'completed',
+            'run_id': run_id,
+            'timestamp': latest_run.get('timestamp', datetime.now()).isoformat(),
+            'operations': len(latest_run.get('operations', [])),
+            'completed': len(latest_run.get('operations', [])),
+            'failed': 0,
+            'results_stored': {op['operation']: op['record_count'] for op in stored_results},
+            'message': f'Latest MapReduce run stored with {len(stored_results)} result sets'
+        }
+    
+    except Exception as e:
+        logger.error(f"Error retrieving MapReduce status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get('/api/mapreduce/results/{operation}')
+async def get_mapreduce_result(operation: str):
+    """Get stored MapReduce result for a specific operation"""
+    if not mongo_available or db is None:
+        raise HTTPException(status_code=500, detail="MongoDB not available")
+    
+    try:
+        # Get latest run
+        runs_collection = db['mapreduce_runs']
+        latest_run = runs_collection.find_one(sort=[('timestamp', -1)])
+        
+        if not latest_run:
+            raise HTTPException(status_code=404, detail="No MapReduce results found")
+        
+        run_id = latest_run['_id']
+        results_collection = db['mapreduce_results']
+        
+        # Retrieve specific operation result
+        result = results_collection.find_one({
+            'run_id': run_id,
+            'operation': operation
+        })
+        
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Operation '{operation}' not found in results")
+        
+        logger.info(f"✅ Retrieved stored result for operation: {operation}")
+        return result['data']
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving MapReduce result: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get('/api/mapreduce/history')
+async def get_mapreduce_history():
+    """Get history of all MapReduce runs"""
+    if not mongo_available or db is None:
+        raise HTTPException(status_code=500, detail="MongoDB not available")
+    
+    try:
+        runs_collection = db['mapreduce_runs']
+        
+        # Get last 10 runs
+        history = list(runs_collection.find().sort('timestamp', -1).limit(10))
+        
+        # Convert to serializable format
+        history_data = []
+        for run in history:
+            history_data.append({
+                'run_id': run['_id'],
+                'timestamp': run.get('timestamp', '').isoformat() if hasattr(run.get('timestamp'), 'isoformat') else str(run.get('timestamp')),
+                'status': run.get('status', 'unknown'),
+                'operations_count': len(run.get('operations', [])),
+                'operations': run.get('operations', [])
+            })
+        
+        logger.info(f"✅ Retrieved MapReduce history: {len(history_data)} runs")
+        return history_data
+    
+    except Exception as e:
+        logger.error(f"Error retrieving MapReduce history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================

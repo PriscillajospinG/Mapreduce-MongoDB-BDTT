@@ -3,6 +3,7 @@ import { Loader, AlertCircle, Play, CheckCircle, Zap, TrendingUp, Activity, Info
 import { climateAPI } from '../api/api'
 import { StatsGrid } from '../components/StatsCard'
 import { DatasetUpload } from '../components/DatasetUpload'
+import { MapReduceResultsModal } from '../components/MapReduceResultsModal'
 
 export function Dashboard() {
   const [stats, setStats] = useState(null)
@@ -11,6 +12,8 @@ export function Dashboard() {
   const [mapReduceRunning, setMapReduceRunning] = useState(false)
   const [mapReduceSuccess, setMapReduceSuccess] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(false)
+  const [showResultsModal, setShowResultsModal] = useState(false)
+  const [latestRunId, setLatestRunId] = useState(null)
 
   useEffect(() => {
     fetchStats()
@@ -42,8 +45,20 @@ export function Dashboard() {
       setMapReduceSuccess(false)
       const response = await climateAPI.runMapReduce()
       console.log('MapReduce started:', response.data)
+      
+      // Get the run ID from response
+      if (response.data.run_id) {
+        setLatestRunId(response.data.run_id)
+      }
+      
       setMapReduceSuccess(true)
-      setTimeout(() => setMapReduceSuccess(false), 3000)
+      
+      // Wait a moment then show results
+      setTimeout(() => {
+        setShowResultsModal(true)
+        setMapReduceSuccess(false)
+      }, 1500)
+      
       // Refresh stats after MapReduce completes
       setTimeout(fetchStats, 2000)
     } catch (err) {
@@ -184,12 +199,19 @@ export function Dashboard() {
             </div>
           </div>
 
-          {/* Upload Section */}
+      {/* Upload Section */}
           <div className="mt-8">
             <DatasetUpload onUploadSuccess={fetchStats} />
           </div>
         </>
       )}
+
+      {/* MapReduce Results Modal */}
+      <MapReduceResultsModal 
+        isOpen={showResultsModal} 
+        onClose={() => setShowResultsModal(false)}
+        runId={latestRunId}
+      />
     </div>
   )
 }

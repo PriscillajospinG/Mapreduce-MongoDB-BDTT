@@ -36,7 +36,11 @@ export const climateAPI = {
   // Operations
   preprocessData: (datasetName) => api.post(`/preprocess/${datasetName}`),
   runMapReduce: () => api.post('/mapreduce/run'),
-  getMapReduceStatus: () => api.get('/mapreduce/status')
+  getMapReduceStatus: () => api.get('/mapreduce/status'),
+  
+  // MapReduce results storage
+  getMapReduceResult: (operation) => api.get(`/mapreduce/results/${operation}`),
+  getMapReduceHistory: () => api.get('/mapreduce/history')
 }
 
 export default api
