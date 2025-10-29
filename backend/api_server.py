@@ -308,5 +308,5 @@ def internal_error(error):
 if __name__ == '__main__':
     logger.info("Starting Climate Analysis API Server")
     logger.info("Frontend: http://localhost:3000")
-    logger.info("API: http://localhost:5000")
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    logger.info("API: http://localhost:5001")
+    app.run(debug=True, port=5001, host='0.0.0.0')
