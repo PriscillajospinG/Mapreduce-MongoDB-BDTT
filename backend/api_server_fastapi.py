@@ -11,12 +11,27 @@ import logging
 import os
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
+from bson import ObjectId
 import uvicorn
 from typing import Optional, List, Dict, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Helper function to convert MongoDB types to JSON-serializable types
+def convert_to_serializable(obj):
+    """Convert MongoDB types to JSON-serializable types"""
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, datetime):
+        return obj.isoformat() if hasattr(obj, 'isoformat') else str(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(item) for item in obj]
+    else:
+        return obj
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -897,6 +912,9 @@ async def upload_csv(file: UploadFile = File(...)):
         # Get sample data
         sample_docs = list(collection.find().limit(5))
         
+        # Convert to serializable format
+        sample_docs = [convert_to_serializable(doc) for doc in sample_docs]
+        
         # Store metadata
         metadata = {
             'collection_name': collection_name,
@@ -935,16 +953,8 @@ async def get_uploaded_collections():
         metadata_collection = db['upload_metadata']
         uploads = list(metadata_collection.find().sort('upload_date', -1))
         
-        # Convert ObjectId to string for JSON serialization
-        result = []
-        for upload in uploads:
-            result.append({
-                'collection_name': upload['collection_name'],
-                'original_file': upload['original_file'],
-                'upload_date': upload['upload_date'].isoformat() if hasattr(upload['upload_date'], 'isoformat') else str(upload['upload_date']),
-                'document_count': upload['document_count'],
-                'fields': upload.get('fields', [])
-            })
+        # Convert to serializable format
+        result = [convert_to_serializable(upload) for upload in uploads]
         
         logger.info(f"✅ Retrieved {len(result)} uploaded collections")
         return result
@@ -964,10 +974,8 @@ async def get_collection_data(collection_name: str, limit: int = 10):
         collection = db[collection_name]
         documents = list(collection.find().limit(limit))
         
-        # Convert ObjectId to string
-        for doc in documents:
-            if '_id' in doc:
-                doc['_id'] = str(doc['_id'])
+        # Convert to serializable format
+        documents = [convert_to_serializable(doc) for doc in documents]
         
         total_count = collection.count_documents({})
         
@@ -1033,6 +1041,9 @@ async def run_mapreduce_on_collection(collection_name: str):
                 {'$limit': 10}
             ]))
             
+            # Convert to serializable format
+            agg_result = [convert_to_serializable(item) for item in agg_result]
+            
             op_name = 'avg_temperature'
             operation_result = {
                 'run_id': run_id,
@@ -1061,6 +1072,9 @@ async def run_mapreduce_on_collection(collection_name: str):
                     {'$sort': {'_id': -1}},
                     {'$limit': 10}
                 ]))
+                
+                # Convert to serializable format
+                agg_result = [convert_to_serializable(item) for item in agg_result]
                 
                 op_name = 'records_by_date'
                 operation_result = {
@@ -1091,6 +1105,9 @@ async def run_mapreduce_on_collection(collection_name: str):
                         'total_records': {'$sum': 1}
                     }}
                 ]))
+                
+                # Convert to serializable format
+                agg_result = [convert_to_serializable(item) for item in agg_result]
                 
                 op_name = 'temperature_stats'
                 operation_result = {
