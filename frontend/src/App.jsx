@@ -5,6 +5,7 @@ import { Analytics } from './pages/Analytics'
 import { UploadPage } from './pages/Upload'
 import { SettingsPage } from './pages/Settings'
 import { Collections } from './pages/Collections'
+import { QuickAnalysis } from './pages/QuickAnalysis'
 import './index.css'
 
 export default function App() {
@@ -14,6 +15,7 @@ export default function App() {
         <Navbar />
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/quick-analysis" element={<QuickAnalysis />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/upload" element={<UploadPage />} />
           <Route path="/collections" element={<Collections />} />

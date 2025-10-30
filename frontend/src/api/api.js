@@ -11,8 +11,8 @@ export const climateAPI = {
   // Health check
   getHealth: () => api.get('/health'),
 
-  // Complete workflow: Upload → Preprocess → MapReduce
-  completeAnalysisWorkflow: (formData) => {
+  // Complete workflow: Upload → Preprocess → MapReduce → Visualize
+  completePipeline: (formData) => {
     return api.post('/workflow/complete-analysis', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
@@ -70,4 +70,7 @@ export const climateAPI = {
   getMapReduceHistory: () => api.get('/mapreduce/history')
 }
 
-export default api
+// Also export api object for direct use
+export { api }
+
+export default climateAPI

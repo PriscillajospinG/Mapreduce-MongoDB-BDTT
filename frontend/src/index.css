@@ -157,7 +157,7 @@ body {
 
 /* Chart container */
 .chart-container {
-  @apply card fade-in;
+  @apply fade-in;
 }
 
 /* Table styling */

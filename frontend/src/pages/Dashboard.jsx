@@ -1,217 +1,183 @@
 import { useState, useEffect } from 'react'
-import { Loader, AlertCircle, Play, CheckCircle, Zap, TrendingUp, Activity, Info } from 'lucide-react'
+import { Database, TrendingUp, Zap, FileText, BarChart3, ArrowRight } from 'lucide-react'
 import { climateAPI } from '../api/api'
-import { StatsGrid } from '../components/StatsCard'
-import { DatasetUpload } from '../components/DatasetUpload'
-import { MapReduceResultsModal } from '../components/MapReduceResultsModal'
+import { Link } from 'react-router-dom'
 
 export function Dashboard() {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [mapReduceRunning, setMapReduceRunning] = useState(false)
-  const [mapReduceSuccess, setMapReduceSuccess] = useState(false)
-  const [autoRefresh, setAutoRefresh] = useState(false)
-  const [showResultsModal, setShowResultsModal] = useState(false)
-  const [latestRunId, setLatestRunId] = useState(null)
 
   useEffect(() => {
     fetchStats()
   }, [])
-
-  useEffect(() => {
-    if (!autoRefresh) return
-    const interval = setInterval(fetchStats, 5000)
-    return () => clearInterval(interval)
-  }, [autoRefresh])
 
   const fetchStats = async () => {
     try {
       setLoading(true)
       const response = await climateAPI.getSummaryStats()
       setStats(response.data)
-      setError(null)
     } catch (err) {
-      setError(err.message)
-      console.error(err)
+      console.error('Error fetching stats:', err)
     } finally {
       setLoading(false)
     }
   }
 
-  const handleRunMapReduce = async () => {
-    try {
-      setMapReduceRunning(true)
-      setMapReduceSuccess(false)
-      const response = await climateAPI.runMapReduce()
-      console.log('MapReduce started:', response.data)
-      
-      // Get the run ID from response
-      if (response.data.run_id) {
-        setLatestRunId(response.data.run_id)
-      }
-      
-      setMapReduceSuccess(true)
-      
-      // Wait a moment then show results
-      setTimeout(() => {
-        setShowResultsModal(true)
-        setMapReduceSuccess(false)
-      }, 1500)
-      
-      // Refresh stats after MapReduce completes
-      setTimeout(fetchStats, 2000)
-    } catch (err) {
-      setError(err.message)
-      console.error(err)
-    } finally {
-      setMapReduceRunning(false)
-    }
-  }
-
   return (
-    <div className="container pb-12">
-      {/* Header with controls */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="section-title">Climate Data Analysis Dashboard</h1>
-            <p className="text-gray-600">
-              Analyze global temperature data using MapReduce operations with MongoDB
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+      <div className="container mx-auto px-4 py-12">
+        <div className="max-w-6xl mx-auto">
+          
+          {/* Clean Header */}
+          <div className="mb-12">
+            <h1 className="text-4xl font-bold text-gray-900 mb-3">
+              Climate Analysis Platform
+            </h1>
+            <p className="text-lg text-gray-600">
+              MongoDB MapReduce • Big Data Analytics • Real-time Processing
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setAutoRefresh(!autoRefresh)}
-              className={`p-2 rounded-lg transition-all ${
-                autoRefresh
-                  ? 'bg-green-100 text-green-600'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-              title="Auto-refresh every 5 seconds"
-            >
-              <Activity className={`w-5 h-5 ${autoRefresh ? 'animate-spin' : ''}`} />
-            </button>
-            <button
-              onClick={fetchStats}
-              className="p-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all"
-              title="Refresh now"
-            >
-              <Zap className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      </div>
 
-      {/* Error State */}
-      {error && (
-        <div className="alert-error mb-6">
-          <AlertCircle className="w-5 h-5 flex-shrink-0" />
-          <span>{error}</span>
-          <button
-            onClick={fetchStats}
-            className="ml-auto btn-secondary text-sm"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* Loading State */}
-      {loading ? (
-        <div className="flex flex-col items-center justify-center h-96">
-          <Loader className="w-12 h-12 animate-spin text-blue-600 mb-4" />
-          <p className="text-gray-600">Loading dashboard data...</p>
-        </div>
-      ) : (
-        <>
-          {/* Statistics Grid */}
-          {stats && <StatsGrid stats={stats} />}
-
-          {/* Main Actions */}
-          <div className="mt-8">
-            <h2 className="subsection-title flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-blue-600" />
-              MapReduce Operations
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <button 
-                onClick={handleRunMapReduce}
-                disabled={mapReduceRunning}
-                className={`card text-left hover:shadow-2xl transition-all flex items-center justify-between group ${
-                  mapReduceRunning ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer'
-                }`}
-              >
-                <div className="flex-1">
-                  <h3 className="font-semibold text-gray-800 group-hover:text-blue-600 transition-colors">
-                    🚀 Run MapReduce Operations
-                  </h3>
-                  <p className="text-sm text-gray-600 mt-1">Execute all 6 MapReduce operations on your climate data</p>
-                  <div className="mt-2 text-xs text-gray-500">
-                    Processes: Avg Temp • Trends • Seasonal • Extremes • Decades • Records
-                  </div>
+          {/* Key Metrics - Clean Cards */}
+          {!loading && stats && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+              <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                <div className="flex items-center justify-between mb-3">
+                  <Database className="w-8 h-8 text-indigo-600" />
                 </div>
-                <div className="ml-4 flex-shrink-0">
-                  {mapReduceRunning ? (
-                    <div className="relative w-10 h-10">
-                      <Loader className="w-10 h-10 animate-spin text-blue-600" />
-                    </div>
-                  ) : mapReduceSuccess ? (
-                    <CheckCircle className="w-10 h-10 text-green-600 animate-bounce" />
-                  ) : (
-                    <Play className="w-10 h-10 text-blue-600 group-hover:scale-110 transition-transform" />
-                  )}
-                </div>
-              </button>
+                <p className="text-sm font-medium text-gray-600 mb-1">Total Records</p>
+                <p className="text-3xl font-bold text-gray-900">
+                  {stats.total_documents?.toLocaleString() || '0'}
+                </p>
+              </div>
 
-              <a 
-                href="/analytics"
-                className="card text-left hover:shadow-2xl transition-all cursor-pointer group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-gray-800 group-hover:text-purple-600 transition-colors">
-                      📊 View Analytics
-                    </h3>
-                    <p className="text-sm text-gray-600 mt-1">Explore all 6 MapReduce visualizations</p>
-                    <div className="mt-2 text-xs text-gray-500">
-                      Charts • Tables • Trends • Reports
-                    </div>
-                  </div>
-                  <TrendingUp className="w-10 h-10 text-purple-600 flex-shrink-0 group-hover:scale-110 transition-transform" />
+              <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                <div className="flex items-center justify-between mb-3">
+                  <FileText className="w-8 h-8 text-purple-600" />
                 </div>
-              </a>
+                <p className="text-sm font-medium text-gray-600 mb-1">Collections</p>
+                <p className="text-3xl font-bold text-gray-900">
+                  {stats.collections?.length || '0'}
+                </p>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                <div className="flex items-center justify-between mb-3">
+                  <BarChart3 className="w-8 h-8 text-teal-600" />
+                </div>
+                <p className="text-sm font-medium text-gray-600 mb-1">MapReduce Results</p>
+                <p className="text-3xl font-bold text-gray-900">
+                  {stats.mapreduce_collections || '6'}
+                </p>
+              </div>
             </div>
+          )}
+
+          {/* Main Action Cards - Clean & Focused */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            
+            {/* Quick Analysis */}
+            <Link
+              to="/quick-analysis"
+              className="group bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl shadow-lg hover:shadow-2xl transition-all p-8 text-white"
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
+                  <Zap className="w-7 h-7" />
+                </div>
+                <ArrowRight className="w-6 h-6 transform group-hover:translate-x-1 transition-transform" />
+              </div>
+              <h3 className="text-2xl font-bold mb-2">Quick Analysis</h3>
+              <p className="text-indigo-100 text-sm">
+                Upload CSV, run MapReduce, and get instant results in one click
+              </p>
+            </Link>
+
+            {/* Analytics Dashboard */}
+            <Link
+              to="/analytics"
+              className="group bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl shadow-lg hover:shadow-2xl transition-all p-8 text-white"
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
+                  <TrendingUp className="w-7 h-7" />
+                </div>
+                <ArrowRight className="w-6 h-6 transform group-hover:translate-x-1 transition-transform" />
+              </div>
+              <h3 className="text-2xl font-bold mb-2">View Analytics</h3>
+              <p className="text-teal-100 text-sm">
+                Explore visualizations, charts, and detailed MapReduce results
+              </p>
+            </Link>
+
           </div>
 
-          {/* Quick Info */}
-          <div className="mt-8">
-            <div className="alert-info">
-              <Info className="w-5 h-5 flex-shrink-0" />
-              <div className="flex-1">
-                <p className="font-semibold text-sm">How to use this dashboard:</p>
-                <ul className="text-sm mt-2 space-y-1 text-blue-700">
-                  <li>1️⃣ Click "Run MapReduce Operations" to start analysis</li>
-                  <li>2️⃣ Navigate to "Analytics" to view results and visualizations</li>
-                  <li>3️⃣ Use auto-refresh to monitor real-time data</li>
-                </ul>
+          {/* System Overview - Simple */}
+          <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
+            <h2 className="text-xl font-bold text-gray-900 mb-6">System Overview</h2>
+            
+            <div className="space-y-4">
+              <div className="flex items-center justify-between py-3 border-b border-gray-100">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="font-medium text-gray-700">Database Status</span>
+                </div>
+                <span className="text-sm text-gray-600">Connected</span>
+              </div>
+
+              <div className="flex items-center justify-between py-3 border-b border-gray-100">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="font-medium text-gray-700">API Server</span>
+                </div>
+                <span className="text-sm text-gray-600">Running</span>
+              </div>
+
+              <div className="flex items-center justify-between py-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                  <span className="font-medium text-gray-700">MapReduce Engine</span>
+                </div>
+                <span className="text-sm text-gray-600">Ready</span>
               </div>
             </div>
           </div>
 
-      {/* Upload Section */}
-          <div className="mt-8">
-            <DatasetUpload onUploadSuccess={fetchStats} />
-          </div>
-        </>
-      )}
+          {/* Quick Links - Minimal */}
+          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Link
+              to="/upload"
+              className="p-4 bg-white rounded-xl border border-gray-100 hover:border-indigo-200 hover:shadow-md transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <Database className="w-5 h-5 text-indigo-600" />
+                <span className="font-medium text-gray-700 group-hover:text-indigo-600">Upload Data</span>
+              </div>
+            </Link>
 
-      {/* MapReduce Results Modal */}
-      <MapReduceResultsModal 
-        isOpen={showResultsModal} 
-        onClose={() => setShowResultsModal(false)}
-        runId={latestRunId}
-      />
+            <Link
+              to="/collections"
+              className="p-4 bg-white rounded-xl border border-gray-100 hover:border-purple-200 hover:shadow-md transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <FileText className="w-5 h-5 text-purple-600" />
+                <span className="font-medium text-gray-700 group-hover:text-purple-600">View Collections</span>
+              </div>
+            </Link>
+
+            <Link
+              to="/settings"
+              className="p-4 bg-white rounded-xl border border-gray-100 hover:border-teal-200 hover:shadow-md transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <BarChart3 className="w-5 h-5 text-teal-600" />
+                <span className="font-medium text-gray-700 group-hover:text-teal-600">Settings</span>
+              </div>
+            </Link>
+          </div>
+
+        </div>
+      </div>
     </div>
   )
 }

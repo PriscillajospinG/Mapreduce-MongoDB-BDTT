@@ -111,27 +111,30 @@ async def get_summary_stats():
         }
     
     try:
-        collections_info = {
-            'country': 'country_temps',
-            'city': 'city_temps',
-            'state': 'state_temps',
-            'major_city': 'major_city_temps',
-            'global': 'global_temps'
-        }
+        # Get all collections in the database
+        all_collections = db.list_collection_names()
         
-        datasets = {}
-        total_records = 0
+        # Filter for uploaded data collections (exclude MapReduce result collections)
+        uploaded_collections = [c for c in all_collections if c.startswith('uploaded_')]
+        mapreduce_collections = [c for c in all_collections if c in [
+            'avg_temp_by_country', 'temp_trends_by_year', 'seasonal_analysis',
+            'extreme_temps', 'decade_analysis', 'records_by_country'
+        ]]
+        
+        # Count total documents across all uploaded collections
+        total_documents = 0
         total_temp = 0
         count_for_avg = 0
         
-        for key, coll_name in collections_info.items():
+        for coll_name in uploaded_collections:
             try:
                 collection = db[coll_name]
                 count = collection.count_documents({})
-                datasets[key] = {'records': count, 'status': 'ready'}
-                total_records += count
+                total_documents += count
                 
+                # Try to calculate average temperature if the field exists
                 avg_result = list(collection.aggregate([
+                    {'$match': {'AverageTemperature': {'$exists': True, '$ne': None}}},
                     {'$group': {'_id': None, 'avg': {'$avg': '$AverageTemperature'}}}
                 ]))
                 if avg_result and avg_result[0].get('avg'):
@@ -139,17 +142,18 @@ async def get_summary_stats():
                     count_for_avg += count
             except Exception as e:
                 logger.warning(f"Error getting stats for {coll_name}: {e}")
-                datasets[key] = {'records': 0, 'status': 'error'}
         
         avg_temp = round(total_temp / count_for_avg, 2) if count_for_avg > 0 else 0
         
-        logger.info(f"✅ Summary: {total_records:,} records, avg temp: {avg_temp}°C")
+        logger.info(f"✅ Summary: {total_documents:,} records, avg temp: {avg_temp}°C")
         return {
-            'total_records': total_records,
-            'dataset_count': len(datasets),
+            'total_documents': total_documents,
+            'total_records': total_documents,  # Keep for backwards compatibility
+            'collections': uploaded_collections,
+            'mapreduce_collections': len(mapreduce_collections),
+            'dataset_count': len(uploaded_collections),
             'avg_temperature': avg_temp,
-            'last_updated': datetime.now().isoformat(),
-            'datasets': datasets
+            'last_updated': datetime.now().isoformat()
         }
     
     except Exception as e:
@@ -239,7 +243,7 @@ async def get_avg_temp_by_country():
                 'count': {'$sum': 1}
             }},
             {'$sort': {'average': -1}},
-            {'$limit': 50},
+            {'$limit': 100},  # Increased from 50 to 100
             {'$project': {
                 'Country': '$_id',
                 'average': {'$round': ['$average', 2]},
@@ -373,14 +377,14 @@ async def get_extreme_temps():
         
         pipeline_warm = [
             {'$sort': {'AverageTemperature': -1}},
-            {'$limit': 5},
+            {'$limit': 15},  # Increased from 5 to 15
             {'$addFields': {'type': 'Warmest'}},
             {'$project': {'dt': 1, 'Country': 1, 'AverageTemperature': {'$round': ['$AverageTemperature', 2]}, 'type': 1, '_id': 0}}
         ]
         
         pipeline_cold = [
             {'$sort': {'AverageTemperature': 1}},
-            {'$limit': 5},
+            {'$limit': 15},  # Increased from 5 to 15
             {'$addFields': {'type': 'Coldest'}},
             {'$project': {'dt': 1, 'Country': 1, 'AverageTemperature': {'$round': ['$AverageTemperature', 2]}, 'type': 1, '_id': 0}}
         ]
@@ -457,7 +461,7 @@ async def get_records_by_country():
                 'record_count': {'$sum': 1}
             }},
             {'$sort': {'record_count': -1}},
-            {'$limit': 50},
+            {'$limit': 100},  # Increased from 50 to 100
             {'$project': {
                 'Country': '$_id',
                 'record_count': 1,
@@ -1237,30 +1241,74 @@ async def complete_analysis(file: UploadFile = File(...)):
             'outliers_handled': 0
         }
         
-        # Remove documents with null values in key fields
-        key_fields = ['AverageTemperature', 'temperature', 'avg_temp', 'temp', 'dt', 'date']
+        # Remove documents with null values in key temperature fields
+        key_fields = ['AverageTemperature', 'temperature', 'avg_temp', 'temp']
         initial_count = collection.count_documents({})
         
-        # Build filter for documents with at least one key field
-        has_key_field = {'$or': [{field: {'$exists': True, '$ne': None}} for field in key_fields]}
-        valid_docs = collection.count_documents(has_key_field)
-        preprocessing_stats['removed_nulls'] = initial_count - valid_docs
+        # Delete documents where ALL temperature fields are null or missing
+        delete_filter = {
+            '$and': [
+                {'$or': [
+                    {field: {'$exists': False}} for field in key_fields
+                ] + [
+                    {field: None} for field in key_fields
+                ]}
+            ]
+        }
         
-        # Remove duplicates by keeping only one document per unique set of key fields
-        temp_collection = db[f"{collection_name}_temp"]
-        pipeline = [
-            {'$group': {
-                '_id': '$_id',
-                'doc': {'$first': '$$ROOT'}
-            }},
-            {'$replaceRoot': {'newRoot': '$doc'}}
+        # More practical: Delete if AverageTemperature (main field) is null
+        delete_result = collection.delete_many({
+            '$or': [
+                {'AverageTemperature': None},
+                {'AverageTemperature': {'$exists': False}}
+            ]
+        })
+        
+        preprocessing_stats['removed_nulls'] = delete_result.deleted_count
+        
+        # Count remaining documents after null removal
+        after_null_removal = collection.count_documents({})
+        logger.info(f"📊 Removed {preprocessing_stats['removed_nulls']:,} null records. {after_null_removal:,} records remaining.")
+        
+        # Remove duplicates based on Country, City (if exists), and dt fields
+        # This keeps only the first occurrence of duplicate combinations
+        duplicate_pipeline = [
+            {
+                '$group': {
+                    '_id': {
+                        'Country': '$Country',
+                        'City': '$City',
+                        'dt': '$dt'
+                    },
+                    'doc_id': {'$first': '$_id'},
+                    'count': {'$sum': 1}
+                }
+            },
+            {'$match': {'count': {'$gt': 1}}}
         ]
         
-        temp_docs = list(collection.aggregate(pipeline))
-        if len(temp_docs) < valid_docs:
-            preprocessing_stats['removed_duplicates'] = valid_docs - len(temp_docs)
+        duplicates = list(collection.aggregate(duplicate_pipeline))
+        if duplicates:
+            # Get IDs of documents to keep (first occurrence)
+            ids_to_keep = {dup['doc_id'] for dup in duplicates}
+            
+            # Delete all duplicates except the ones we want to keep
+            for dup in duplicates:
+                key = dup['_id']
+                # Delete all except first
+                collection.delete_many({
+                    'Country': key.get('Country'),
+                    'City': key.get('City'),
+                    'dt': key.get('dt'),
+                    '_id': {'$ne': dup['doc_id']}
+                })
+            
+            preprocessing_stats['removed_duplicates'] = len(duplicates)
+            logger.info(f"📊 Removed {preprocessing_stats['removed_duplicates']:,} duplicate records.")
         
+        final_count = collection.count_documents({})
         logger.info(f"✅ Preprocessing complete: {preprocessing_stats}")
+        logger.info(f"📊 Final record count: {final_count:,} (cleaned from {initial_count:,})")
         
         # ============================================
         # STEP 4: RUN MAPREDUCE OPERATIONS
