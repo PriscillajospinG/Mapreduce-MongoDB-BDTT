@@ -1,158 +1,214 @@
 import { useState } from 'react'
-import { Upload, CheckCircle, AlertCircle, Loader } from 'lucide-react'
-import { DatasetUpload } from '../components/DatasetUpload'
+import { Upload, CheckCircle, AlertCircle, Database, FileText } from 'lucide-react'
 import { climateAPI } from '../api/api'
 
 export function UploadPage() {
+  const [file, setFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState(null)
-  const [preprocessing, setPreprocessing] = useState(false)
-  const [runningMapReduce, setRunningMapReduce] = useState(false)
 
-  const handleUploadSuccess = (response) => {
-    setUploadStatus({
-      type: 'success',
-      message: response.message || 'Dataset uploaded successfully!'
-    })
-    setTimeout(() => setUploadStatus(null), 5000)
-  }
-
-  const handlePreprocess = async (datasetName) => {
-    try {
-      setPreprocessing(true)
-      const response = await climateAPI.preprocessData(datasetName)
-      setUploadStatus({
-        type: 'success',
-        message: `Preprocessing complete: ${response.data.message}`
-      })
-    } catch (err) {
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0]
+    if (selectedFile && selectedFile.name.endsWith('.csv')) {
+      setFile(selectedFile)
+      setUploadStatus(null)
+    } else {
       setUploadStatus({
         type: 'error',
-        message: err.response?.data?.error || 'Preprocessing failed'
+        message: 'Please select a valid CSV file'
       })
-    } finally {
-      setPreprocessing(false)
+      setFile(null)
     }
   }
 
-  const handleRunMapReduce = async () => {
+  const handleUpload = async () => {
+    if (!file) {
+      setUploadStatus({
+        type: 'error',
+        message: 'Please select a file first'
+      })
+      return
+    }
+
+    const formData = new FormData()
+    formData.append('file', file)
+
     try {
-      setRunningMapReduce(true)
-      const response = await climateAPI.runMapReduce()
+      setUploading(true)
+      const response = await climateAPI.uploadCSV(formData)
       setUploadStatus({
         type: 'success',
-        message: `MapReduce complete: ${response.data.message}`
+        message: `Successfully uploaded ${file.name} - ${response.data.count || 0} records`
       })
+      setFile(null)
+      // Reset file input
+      document.getElementById('file-upload').value = ''
     } catch (err) {
       setUploadStatus({
         type: 'error',
-        message: err.response?.data?.error || 'MapReduce failed'
+        message: err.response?.data?.detail || 'Upload failed. Please try again.'
       })
     } finally {
-      setRunningMapReduce(false)
+      setUploading(false)
     }
   }
 
   return (
-    <div className="container">
-      <h1 className="section-title flex items-center gap-2">
-        <Upload className="w-8 h-8" />
-        Data Management
-      </h1>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+      <div className="container mx-auto px-4 py-12">
+        <div className="max-w-4xl mx-auto">
+          
+          {/* Header */}
+          <div className="mb-12">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-12 h-12 bg-gradient-to-br from-indigo-600 to-purple-600 rounded-xl flex items-center justify-center">
+                <Database className="w-6 h-6 text-white" />
+              </div>
+              <h1 className="text-4xl font-bold text-gray-900">Data Management</h1>
+            </div>
+            <p className="text-lg text-gray-600">
+              Upload climate datasets in CSV format to MongoDB
+            </p>
+          </div>
 
-      {/* Status Messages */}
-      {uploadStatus && (
-        <div className={`mb-6 p-4 rounded-lg flex items-center gap-2 ${
-          uploadStatus.type === 'success'
-            ? 'bg-green-100 text-green-700 border border-green-400'
-            : 'bg-red-100 text-red-700 border border-red-400'
-        }`}>
-          {uploadStatus.type === 'success' ? (
-            <CheckCircle className="w-5 h-5" />
-          ) : (
-            <AlertCircle className="w-5 h-5" />
+          {/* Status Message */}
+          {uploadStatus && (
+            <div className={`mb-6 p-4 rounded-xl border-l-4 ${
+              uploadStatus.type === 'success'
+                ? 'bg-emerald-50 border-emerald-500'
+                : 'bg-red-50 border-red-500'
+            }`}>
+              <div className="flex items-center gap-3">
+                {uploadStatus.type === 'success' ? (
+                  <CheckCircle className="w-5 h-5 text-emerald-600" />
+                ) : (
+                  <AlertCircle className="w-5 h-5 text-red-600" />
+                )}
+                <div>
+                  <p className={`font-medium ${
+                    uploadStatus.type === 'success' ? 'text-emerald-800' : 'text-red-800'
+                  }`}>
+                    {uploadStatus.type === 'success' ? 'Success' : 'Error'}
+                  </p>
+                  <p className={`text-sm ${
+                    uploadStatus.type === 'success' ? 'text-emerald-700' : 'text-red-700'
+                  }`}>
+                    {uploadStatus.message}
+                  </p>
+                </div>
+              </div>
+            </div>
           )}
-          <span>{uploadStatus.message}</span>
-        </div>
-      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Upload Section */}
-        <div>
-          <DatasetUpload onUploadSuccess={handleUploadSuccess} />
-        </div>
+          {/* Upload Card */}
+          <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
+            <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-3">
+              <Upload className="w-6 h-6 text-indigo-600" />
+              Upload Dataset
+            </h2>
 
-        {/* Operations Section */}
-        <div>
-          <div className="card">
-            <h3 className="subsection-title">Data Processing</h3>
-            
-            <div className="space-y-3">
+            <div className="space-y-6">
+              {/* File Input */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Preprocess Dataset
+                <label className="block text-sm font-semibold text-gray-700 mb-3">
+                  Select CSV File
                 </label>
-                <select
-                  id="dataset-select"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-2"
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleFileChange}
+                  className="hidden"
+                  id="file-upload"
+                  disabled={uploading}
+                />
+                <label
+                  htmlFor="file-upload"
+                  className="flex flex-col items-center justify-center w-full h-48 px-4 transition-all bg-gradient-to-br from-gray-50 to-slate-100 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-indigo-400 hover:bg-gradient-to-br hover:from-indigo-50 hover:to-purple-50 group"
                 >
-                  <option value="">Select dataset</option>
-                  <option value="country">Country</option>
-                  <option value="city">City</option>
-                  <option value="state">State</option>
-                  <option value="major_city">Major City</option>
-                  <option value="global">Global</option>
-                </select>
-                <button
-                  onClick={() => {
-                    const dataset = document.getElementById('dataset-select').value
-                    if (dataset) handlePreprocess(dataset)
-                  }}
-                  disabled={preprocessing}
-                  className="btn-primary w-full flex items-center justify-center gap-2"
-                >
-                  {preprocessing ? (
-                    <>
-                      <Loader className="w-4 h-4 animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    'Preprocess Data'
-                  )}
-                </button>
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    {file ? (
+                      <>
+                        <FileText className="w-16 h-16 mb-3 text-indigo-600" />
+                        <p className="mb-2 text-lg font-semibold text-indigo-700">
+                          {file.name}
+                        </p>
+                        <p className="text-sm text-gray-500">
+                          {(file.size / 1024 / 1024).toFixed(2)} MB
+                        </p>
+                        <p className="text-xs text-gray-400 mt-2">
+                          Click to change file
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-16 h-16 mb-3 text-gray-400 group-hover:text-indigo-500 transition-colors" />
+                        <p className="mb-2 text-lg font-medium text-gray-700">
+                          Click to upload or drag and drop
+                        </p>
+                        <p className="text-sm text-gray-500">
+                          CSV files only (Max 100MB)
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </label>
               </div>
 
-              <div className="border-t pt-4">
-                <button
-                  onClick={handleRunMapReduce}
-                  disabled={runningMapReduce}
-                  className="btn-primary w-full flex items-center justify-center gap-2"
-                >
-                  {runningMapReduce ? (
-                    <>
-                      <Loader className="w-4 h-4 animate-spin" />
-                      Running MapReduce...
-                    </>
-                  ) : (
-                    'Run MapReduce Operations'
-                  )}
-                </button>
-                <p className="text-xs text-gray-500 mt-2 text-center">
-                  Executes all 6 MapReduce operations
-                </p>
+              {/* Upload Button */}
+              <button
+                onClick={handleUpload}
+                disabled={!file || uploading}
+                className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 px-8 rounded-xl font-semibold text-lg shadow-lg hover:shadow-xl hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed disabled:shadow-none transition-all duration-200 flex items-center justify-center gap-3"
+              >
+                {uploading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    Uploading to MongoDB...
+                  </>
+                ) : (
+                  <>
+                    <Database className="w-5 h-5" />
+                    Upload to Database
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Available Datasets Info */}
+          <div className="mt-8 bg-white rounded-2xl shadow-sm p-6 border border-gray-100">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Available Datasets</h3>
+            <div className="space-y-2 text-sm text-gray-600">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-indigo-500 rounded-full"></div>
+                <span>GlobalLandTemperaturesByCountry.csv</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                <span>GlobalLandTemperaturesByCity.csv</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-teal-500 rounded-full"></div>
+                <span>GlobalLandTemperaturesByState.csv</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-cyan-500 rounded-full"></div>
+                <span>GlobalLandTemperaturesByMajorCity.csv</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-pink-500 rounded-full"></div>
+                <span>GlobalTemperatures.csv</span>
               </div>
             </div>
           </div>
 
-          {/* Info Card */}
-          <div className="card mt-6 bg-blue-50 border border-blue-200">
-            <h3 className="font-semibold text-blue-900 mb-2">Processing Steps</h3>
-            <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
-              <li>Upload CSV dataset</li>
-              <li>Preprocess (clean & transform)</li>
-              <li>Run MapReduce operations</li>
-              <li>View results in Analytics</li>
-            </ol>
+          {/* Quick Info */}
+          <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
+            <p className="text-sm text-blue-800">
+              <span className="font-semibold">💡 Tip:</span> After uploading, use <strong>Quick Analysis</strong> to automatically process and analyze your data.
+            </p>
           </div>
+
         </div>
       </div>
     </div>

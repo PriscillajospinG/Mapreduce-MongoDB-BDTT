@@ -4,12 +4,19 @@ const API_BASE_URL = '/api'
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000
+  timeout: 60000 // Increased timeout for large file processing
 })
 
 export const climateAPI = {
   // Health check
   getHealth: () => api.get('/health'),
+
+  // Complete workflow: Upload → Preprocess → MapReduce → Visualize
+  completePipeline: (formData) => {
+    return api.post('/workflow/complete-analysis', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
 
   // Dataset operations
   uploadDataset: (file, datasetName) => {
@@ -20,6 +27,26 @@ export const climateAPI = {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
   },
+
+  // CSV Upload to MongoDB as JSON
+  uploadCSVToMongoDB: (formData) => {
+    return api.post('/upload/csv', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+
+  // Get uploaded collections
+  getUploadedCollections: () => api.get('/uploaded-collections'),
+
+  // Get collection data
+  getCollectionData: (collectionName, limit = 10) => 
+    api.get(`/collection/${collectionName}`, { params: { limit } }),
+
+  // Run MapReduce on specific collection
+  runMapReduceOnCollection: (collectionName) => 
+    api.post(`/mapreduce/run-on-collection`, null, { 
+      params: { collection_name: collectionName } 
+    }),
 
   // Analytics
   getAverageTempByCountry: () => api.get('/analytics/avg-temp-by-country'),
@@ -36,7 +63,14 @@ export const climateAPI = {
   // Operations
   preprocessData: (datasetName) => api.post(`/preprocess/${datasetName}`),
   runMapReduce: () => api.post('/mapreduce/run'),
-  getMapReduceStatus: () => api.get('/mapreduce/status')
+  getMapReduceStatus: () => api.get('/mapreduce/status'),
+  
+  // MapReduce results storage
+  getMapReduceResult: (operation) => api.get(`/mapreduce/results/${operation}`),
+  getMapReduceHistory: () => api.get('/mapreduce/history')
 }
 
-export default api
+// Also export api object for direct use
+export { api }
+
+export default climateAPI
